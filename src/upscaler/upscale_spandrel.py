@@ -169,12 +169,3 @@ def load_model(model_path):
     m.cuda().eval()
     return m
 
-# spandrel_extra_arches.install()
-# # load a model from disk
-# model = spandrel.ModelLoader()
-
-# # make sure it's an image to image model
-# assert isinstance(model, spandrel.ImageModelDescriptor)
-
-# # send it to the GPU and put it in inference mode
-# model.cuda().eval()

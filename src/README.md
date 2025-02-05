@@ -12,7 +12,7 @@ Windows:
 ```
 cd src
 python -m venv .venv
-source .\.venv\Scripts\activate.bat
+.\.venv\Scripts\activate.bat
 pip install -r requirements.txt
 ```
 
@@ -32,7 +32,7 @@ python main.py <command> [<args>...]
 ## Command Reference
 
 ### Chapters
-Splits a video file into individual videos using embedded chapter data. Extracted videos are named using the title in the chapter data and stored in the same directory.
+Splits a video file into individual videos using embedded chapter data. Extracted videos are named using the title in the chapter data and stored in the same directory under the chapters/ subdirectory.
 
 Arguments:
 - video_file: path to video file

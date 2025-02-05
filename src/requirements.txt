@@ -1,0 +1,9 @@
+opencv-python==4.11.0.86
+pillow==11.1.0
+spandrel==0.4.1
+tqdm==4.66.5
+
+--index-url https://download.pytorch.org/whl/cu126
+torch
+torchvision
+torchaudio

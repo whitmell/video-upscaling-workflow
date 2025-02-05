@@ -1,12 +1,39 @@
 import subprocess
 
-def encode_archive_quality(frame_images_path, original_video_path, output_path):
+def get_audio_offset(video_path):
+    probe_cmd = [
+        "ffprobe",
+        "-v", "error",
+        "-select_streams", "v:0",
+        "-show_entries", "stream=start_time",
+        "-of", "default=nokey=1:noprint_wrappers=1",
+        video_path
+    ]
+    result = subprocess.run(probe_cmd, capture_output=True, text=True)
+    video_start = float(result.stdout.strip())
+
+    probe_cmd = [
+        "ffprobe",
+        "-v", "error",
+        "-select_streams", "a:0",
+        "-show_entries", "stream=start_time",
+        "-of", "default=nokey=1:noprint_wrappers=1",
+        video_path
+    ]
+    result = subprocess.run(probe_cmd, capture_output=True, text=True)
+    audio_start = float(result.stdout.strip())
+
+    offset = str(int(1000 * (audio_start - video_start)))
+    print(offset)
+    return offset
+
+def encode_archive_quality(frame_images_path, original_video_path, output_path, offset):
     command = [
         'ffmpeg',
         '-hwaccel', 'cuda',
         '-framerate', '59.94',
         '-i', f'{frame_images_path}/frame_%06d.png',
-        '-itsoffset', '-0.434',
+        '-itsoffset', offset,
         '-i', original_video_path,
         '-map', '0:v',
         '-map', '1:a',
@@ -29,13 +56,13 @@ def encode_archive_quality(frame_images_path, original_video_path, output_path):
     ]
     subprocess.run(command, check=True)
 
-def encode_youtube_quality(frame_images_path, original_video_path, output_path):
+def encode_youtube_quality(frame_images_path, original_video_path, output_path, offset):
     command = [
         'ffmpeg',
         '-hwaccel', 'cuda',
         '-framerate', '59.94',
         '-i', f'{frame_images_path}/frame_%06d.png',
-        '-itsoffset', '-0.434',
+        '-itsoffset', offset,
         '-i', original_video_path,
         '-map', '0:v',
         '-map', '1:a',
@@ -62,7 +89,10 @@ def encode_youtube_quality(frame_images_path, original_video_path, output_path):
     subprocess.run(command, check=True)
 
 def encode(frame_images_path, original_video_path, output_path, archive_flag=False, youtube_flag=False):
+    
+    offset = get_audio_offset(original_video_path)
+
     if archive_flag:
-        encode_archive_quality(frame_images_path, original_video_path, f'{output_path}.mkv')
+        encode_archive_quality(frame_images_path, original_video_path, f'{output_path}.mkv', offset)
     if youtube_flag:
-        encode_youtube_quality(frame_images_path, original_video_path, f'{output_path}.mp4')
+        encode_youtube_quality(frame_images_path, original_video_path, f'{output_path}.mp4', offset)

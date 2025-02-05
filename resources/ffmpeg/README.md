@@ -33,13 +33,13 @@ ffmpeg -hwaccel cuda -i <input_video> <frame_directory>\frame_%06d.png
 ### Encoding Archive Quality Video
 
 ```
-ffmpeg -hwaccel cuda -framerate 59.94 -i "upscaled/frame_%06d.png" -itsoffset -0.434 -i "OriginalVideo.mkv" -map 0:v -map 1:a -c:v hevc_nvenc -preset slow -surfaces 32 -extra_hw_frames 32 -rc vbr_hq -b:v 50M -maxrate 100M -bufsize 200M -pix_fmt yuv420p -c:a copy -rc-lookahead 32 -vsync 0 -fps_mode passthrough -map_metadata -1 -map_chapters -1 -y "C:\dev\UpscaledVideo-Archive.mkv"
+ffmpeg -hwaccel cuda -framerate 59.94 -i "upscaled/frame_%06d.png" -i "OriginalVideo.mkv" -map 0:v -map 1:a -c:v hevc_nvenc -preset slow -surfaces 32 -extra_hw_frames 32 -rc vbr_hq -b:v 50M -maxrate 100M -bufsize 200M -pix_fmt yuv420p -c:a copy -rc-lookahead 32 -vsync 0 -fps_mode passthrough -map_metadata -1 -map_chapters -1 -y "C:\dev\UpscaledVideo-Archive.mkv"
 ```
 
 ### Encoding Youtube-Optimized Video
 
 ```
-ffmpeg -hwaccel cuda -framerate 59.94 -i "upscaled/frame_%06d.png" -itsoffset -0.434 -i "OriginalVideo.mkv" -map 0:v -map 1:a -c:v h264_nvenc -preset p5 -rc vbr -cq 22 -b:v 20M -maxrate 40M -bufsize 80M -multipass fullres -b_ref_mode middle -rc-lookahead 32 -spatial_aq 1 -temporal_aq 1 -pix_fmt yuv420p -c:a aac -b:a 320k -fps_mode passthrough -map_metadata -1 -map_chapters -1 -y "C:\dev\UpscaledVideo-YouTube.mp4"
+ffmpeg -hwaccel cuda -framerate 59.94 -i "upscaled/frame_%06d.png" -i "OriginalVideo.mkv" -map 0:v -map 1:a -c:v h264_nvenc -preset p5 -rc vbr -cq 22 -b:v 20M -maxrate 40M -bufsize 80M -multipass fullres -b_ref_mode middle -rc-lookahead 32 -spatial_aq 1 -temporal_aq 1 -pix_fmt yuv420p -c:a aac -b:a 320k -fps_mode passthrough -map_metadata -1 -map_chapters -1 -y "C:\dev\UpscaledVideo-YouTube.mp4"
 ```
 
 ### Fixing audio sync
@@ -52,3 +52,5 @@ To fix this in encoding, add the following flag in your ffmpeg encode commands, 
 ```
 -itsoffset -0.431 
 ```
+
+The encode command in the python app calculates this value and includes it when it runs the ffmpeg command.

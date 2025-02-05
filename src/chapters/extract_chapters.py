@@ -28,7 +28,7 @@ def extract_chapters(video_path, output_path=""):
         end_time = float(c.get("end_time", 0))
         title = c.get("tags", {}).get("title", f"chapter_{start_time}")
         # Clean title for filename
-        safe_title = re.sub(r'[\\/*?:"<>|]', '_', title)
+        safe_title = re.sub(r'[\\/*?:"<>\s]', '_', title)
         
         # Build ffmpeg command
         ffmpeg_cmd = [

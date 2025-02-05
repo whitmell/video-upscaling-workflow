@@ -31,34 +31,4 @@ Files and scripts which are needed for steps in this workflow can be found in th
 
 Found in the /src folder
 
-### Setup
-
- It is recommended to use a python virtual environment.  You may need to run 
-
-```
-pip install virtualenv
-```
-
-Then set up the virtual environment and install dependencies.
-
-Linux:
-```
-cd src
-python -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-```
-Windows:
-```
-cd src
-python -m venv .venv
-source .\.venv\Scripts\activate.bat
-pip install -r requirements.txt
-```
-
-Run the application with:
-```
-python main.py <command> [<args>...]
-```
-
-See the app documentation for command reference: [Doc](./src/README.md)
+See the app documentation for setup and command reference: [Doc](./src/README.md)

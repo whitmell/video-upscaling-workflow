@@ -40,14 +40,15 @@ def main():
         extract_chapters(input_file)
         print("Done extracting chapter videos!")
     elif command == "frames":
-        if len(sys.argv) < 3:
-            print("Usage: python main.py frames <video_file>")
+        if len(sys.argv) < 4:
+            print("Usage: python main.py frames <video_file> <aspect_ratio>")
             sys.exit(1)
         input_file = sys.argv[2]
-        extract_frames(input_file)
-        print("Done extracting chapter videos!")
+        aspect_ratio = sys.argv[3]
+        extract_frames(input_file, aspect_ratio)
+        print("Done extracting frames!")
     elif command == "encode":
-        if len(sys.argv) < 6:
+        if len(sys.argv) < 7:
             print("Usage: python main.py encode <input_frame_dir> <input_video_dir> <output_dir> <archive_flag> <youtube_flag>")
             sys.exit(1)
         input_frames = sys.argv[2]
@@ -58,7 +59,7 @@ def main():
         encode(input_frames, input_vid, output_dir, archive_flag, youtube_flag)
         print("Done encoding video!")
     elif command == "archive":
-        if len(sys.argv) < 6:
+        if len(sys.argv) < 5:
             print("Usage: python main.py archive <input_dir> <processed_dir> <output_dir>")
             sys.exit(1)
         input_dir = sys.argv[2]
