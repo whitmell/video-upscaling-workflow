@@ -1,0 +1,8 @@
+SetFilterMTMode("QTGMC", 2)
+FFmpegSource2("VIDEO_PATH", atrack=1)
+ConvertToYV12()
+AssumeTFF()
+#AssumeBFF()
+QTGMC(preset="Slower", EdiThreads=8)
+BilinearResize(960,540)
+Prefetch(24)
