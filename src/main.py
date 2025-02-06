@@ -1,3 +1,4 @@
+import asyncio
 import os
 import glob
 import sys
@@ -7,9 +8,19 @@ from frame_extraction.extract_frames import extract_frames
 from upscaler import upscale_spandrel, FrameDataset
 from encoding.encoder import encode
 
+# Get the directory of the current script
+current_dir = os.path.dirname(os.path.abspath(__file__))
+
+# Navigate one directory up
+parent_dir = os.path.abspath(os.path.join(current_dir, os.pardir))
+
+# Construct the path to the desired file
+realesrgan_path = os.path.join(parent_dir, "resources", "models", "upscaling", "RealESRGAN_x4plus.pth")
+bsrgan_path = os.path.join(parent_dir, "resources", "models", "upscaling", "BSRGAN.pth")
+
 models = {
-    "RealESRGAN_x4plus.pth": "D:\\Video\\Models\\upscale\\RealESRGAN_x4plus.pth",
-    "BSRGAN.pth": "D:\\Video\\Models\\upscale\\BSRGAN.pth"
+    "RealESRGAN_x4plus": realesrgan_path,
+    "BSRGAN": bsrgan_path
 }
 
 def main():
@@ -30,6 +41,7 @@ def main():
 
         # upscale_spandrel.process_dir(input_dir, output_dir)
         dataset = FrameDataset(input_dir)
+        asyncio.run(upscale_spandrel.process_dataset_async(dataset, output_dir, models["RealESRGAN_x4plus"]))
         upscale_spandrel.process_dataset(dataset, output_dir)
         print("Done upscaling images!")
     elif command == "chapters":
@@ -66,7 +78,7 @@ def main():
         processed_dir = sys.argv[3]
         output_dir = sys.argv[4]
         move(input_dir, processed_dir, output_dir)
-        print("Done encoding video!")
+        print("Done archiving processed frames!")
     else:
         print(f"Unknown command '{command}'")
 

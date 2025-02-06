@@ -1,7 +1,5 @@
 ## Setup
-
- It is recommended to use a python virtual environment.  You may need to run 
-
+It is recommended to use a python virtual environment.  You may need to run 
 ```
 pip install virtualenv
 ```

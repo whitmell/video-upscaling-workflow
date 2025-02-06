@@ -1,4 +1,5 @@
 import subprocess
+import os
 
 def get_audio_offset(video_path):
     probe_cmd = [
@@ -89,10 +90,12 @@ def encode_youtube_quality(frame_images_path, original_video_path, output_path, 
     subprocess.run(command, check=True)
 
 def encode(frame_images_path, original_video_path, output_path, archive_flag=False, youtube_flag=False):
-    
+    vidname_without_extension = os.path.splitext(os.path.basename(original_video_path))[0]
+    output_archive = os.path.join(output_path, f'{vidname_without_extension}_archive.mkv')
+    output_youtube = os.path.join(output_path, f'{vidname_without_extension}_youtube.mp4')
     offset = get_audio_offset(original_video_path)
 
     if archive_flag:
-        encode_archive_quality(frame_images_path, original_video_path, f'{output_path}.mkv', offset)
+        encode_archive_quality(frame_images_path, original_video_path, output_archive, offset)
     if youtube_flag:
-        encode_youtube_quality(frame_images_path, original_video_path, f'{output_path}.mp4', offset)
+        encode_youtube_quality(frame_images_path, original_video_path, output_youtube, offset)

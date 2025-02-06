@@ -1,3 +1,4 @@
+import sys
 import spandrel 
 from torchvision import transforms
 import torch
@@ -9,6 +10,10 @@ from tqdm import tqdm
 from .image import FrameDataset
 from torch.utils.data import DataLoader
 from concurrent.futures import ThreadPoolExecutor
+import asyncio
+import cProfile
+import pstats
+import io
 
 # Define collate_fn as a top-level function
 def collate_fn(batch):
@@ -108,7 +113,7 @@ def save_image(result, output_dir):
 
 # use the model
     
-def process_dir(input_dir, output_dir, model="D:\\Video\\Models\\upscale\\RealESRGAN_x4plus.pth"):
+def process_dir(input_dir, output_dir, model):
 
     model = load_model(model)
 
@@ -135,7 +140,7 @@ def process_dir(input_dir, output_dir, model="D:\\Video\\Models\\upscale\\RealES
     progress_bar.close()
     print("Processing complete!")
 
-def process_dataset(dataset: FrameDataset, output_dir, model="D:\\Video\\Models\\upscale\\RealESRGAN_x4plus.pth"):
+def process_dataset(dataset: FrameDataset, output_dir, model):
 
     model = load_model(model)
 
@@ -150,8 +155,54 @@ def process_dataset(dataset: FrameDataset, output_dir, model="D:\\Video\\Models\
     progress_bar = tqdm(total=total_files, desc="Processing images")
     
     count = 1
-    with ThreadPoolExecutor(max_workers=4) as executor:
+    with ThreadPoolExecutor(max_workers=8) as executor:  # Increased max_workers
         for batch in dataloader:
+            results = process_batch(batch, model)
+            for result in results:
+                executor.submit(save_image, result, output_dir)
+                progress_bar.update(1)
+            print(f"Processed batch {count}")
+            count += 1
+    
+    progress_bar.close()
+    print("Processing complete!")
+
+def profile_code(func):
+    def wrapper(*args, **kwargs):
+        pr = cProfile.Profile()
+        pr.enable()
+        result = func(*args, **kwargs)
+        pr.disable()
+        s = io.StringIO()
+        sortby = 'cumulative'
+        ps = pstats.Stats(pr, stream=s).sort_stats(sortby)
+        ps.print_stats()
+        print(s.getvalue())
+        return result
+    return wrapper
+
+async def async_load_data(dataloader):
+    loop = asyncio.get_event_loop()
+    for batch in dataloader:
+        yield await loop.run_in_executor(None, lambda: batch)
+
+@profile_code
+async def process_dataset_async(dataset: FrameDataset, output_dir, model):
+    model = load_model(model)
+
+    if model is None:
+        print("Model is not loaded. Exiting...")
+        return
+    
+    dataloader = DataLoader(dataset, batch_size=16, shuffle=False, num_workers=16, pin_memory=True, collate_fn=collate_fn)
+    total_files = len(dataset)
+    
+    print(f"Starting batch processing of {total_files} files...")
+    progress_bar = tqdm(total=total_files, desc="Processing images")
+    
+    count = 1
+    with ThreadPoolExecutor(max_workers=16) as executor:
+        async for batch in async_load_data(dataloader):
             results = process_batch(batch, model)
             for result in results:
                 executor.submit(save_image, result, output_dir)
@@ -168,4 +219,15 @@ def load_model(model_path):
     assert isinstance(m, spandrel.ImageModelDescriptor)
     m.cuda().eval()
     return m
+
+if __name__ == "__main__":
+    if len(sys.argv) < 3:
+        print("Usage: python upscale_spandrel.py <dataset_path> <output_dir> <model_path>")
+        sys.exit(1)
+    
+    dataset_path = sys.argv[1]
+    output_dir = sys.argv[2]
+    model_path = sys.argv[3]
+    dataset = FrameDataset(dataset_path)  # Assuming FrameDataset is defined elsewhere
+    asyncio.run(process_dataset_async(dataset, output_dir, model_path))
 
