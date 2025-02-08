@@ -24,8 +24,8 @@ def get_audio_offset(video_path):
     result = subprocess.run(probe_cmd, capture_output=True, text=True)
     audio_start = float(result.stdout.strip())
 
-    offset = str(int(1000 * (audio_start - video_start)))
-    print(offset)
+    offset = str(audio_start - video_start)
+    print(f"++ Audio offset: {offset}")
     return offset
 
 def encode_archive_quality(frame_images_path, original_video_path, output_path, offset):
@@ -55,6 +55,7 @@ def encode_archive_quality(frame_images_path, original_video_path, output_path, 
         '-map_chapters', '-1',
         '-y', output_path
     ]
+    print(f"==== Executing FFMPEG Command ====\n\n{' '.join(command)}\n\n==================================")
     subprocess.run(command, check=True)
 
 def encode_youtube_quality(frame_images_path, original_video_path, output_path, offset):
@@ -87,6 +88,7 @@ def encode_youtube_quality(frame_images_path, original_video_path, output_path, 
         '-map_chapters', '-1',
         '-y', output_path
     ]
+    print(f"==== Executing FFMPEG Command ====\n\n{' '.join(command)}\n\n==================================\n")
     subprocess.run(command, check=True)
 
 def encode(frame_images_path, original_video_path, output_path, archive_flag=False, youtube_flag=False):
@@ -95,7 +97,7 @@ def encode(frame_images_path, original_video_path, output_path, archive_flag=Fal
     output_youtube = os.path.join(output_path, f'{vidname_without_extension}_youtube.mp4')
     offset = get_audio_offset(original_video_path)
 
-    if archive_flag:
-        encode_archive_quality(frame_images_path, original_video_path, output_archive, offset)
-    if youtube_flag:
+    if youtube_flag.lower() == 'true':
         encode_youtube_quality(frame_images_path, original_video_path, output_youtube, offset)
+    if archive_flag.lower() == 'true':
+        encode_archive_quality(frame_images_path, original_video_path, output_archive, offset)
