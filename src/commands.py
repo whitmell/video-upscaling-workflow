@@ -1,3 +1,4 @@
+# filepath: src/commands.py
 import asyncio
 import os
 import glob
@@ -70,8 +71,3 @@ def main(command, *args):
         return "Done archiving processed frames!"
     else:
         return f"Unknown command '{command}'"
-
-if __name__ == "__main__":
-    command = sys.argv[1]
-    result = main(command, *sys.argv[2:])
-    print(result)
