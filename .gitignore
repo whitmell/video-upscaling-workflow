@@ -1,3 +1,15 @@
 **/.venv
 **/venv
 **/__pycache__
+build/lib/app/__init__.py
+build/lib/app/routes.py
+build/lib/chapters/__init__.py
+build/lib/chapters/extract_chapters.py
+build/lib/encoding/__init__.py
+build/lib/encoding/encoder.py
+build/lib/frame_extraction/__init__.py
+build/lib/frame_extraction/extract_frames.py
+build/lib/upscaler/__init__.py
+build/lib/upscaler/image.py
+build/lib/upscaler/upscale_realesrgan.py
+build/lib/upscaler/upscale_spandrel.py

@@ -1,8 +1,9 @@
 import os
 import subprocess
 import sys
+from pathlib import Path
 
-template_path="frame_extraction\\templates\\"
+template_path = Path(__file__).resolve().parent / "templates"
 
 def get_video_width(video_path):
     probe_cmd = [
@@ -21,8 +22,8 @@ def get_video_width(video_path):
 
 def create_avs(video_path, aspect_ratio):
     vid_dir = os.path.dirname(video_path)
-    avs_path = f"{vid_dir}\\deinterlace.avs"
-    with open(f"{template_path}default.avs", "r") as f:
+    avs_path = os.path.join(vid_dir, "deinterlace.avs")
+    with open(os.path.join(template_path, "default.avs"), "r") as f:
         avs_content = f.read()
 
     avs_content = avs_content.replace("VIDEO_PATH", video_path)
@@ -42,14 +43,14 @@ def create_avs(video_path, aspect_ratio):
 
 def extract_frames(video_path, aspect_ratio):
     vid_dir = os.path.dirname(video_path)
-    frame_dir = f"{vid_dir}\\frames"
+    frame_dir = os.path.join(vid_dir, "frames")
     os.makedirs(frame_dir, exist_ok=True)
     # Get chapter data
     probe_cmd = [
         "ffmpeg",
         "-hwaccel", "cuda",
         "-i", f"{create_avs(video_path, aspect_ratio)}",
-        frame_dir + "\\frame_%06d.png"
+        os.path.join(frame_dir, "frame_%06d.png")
     ]
     print(probe_cmd)
     result = subprocess.run(probe_cmd)

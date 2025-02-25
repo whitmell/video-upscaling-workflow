@@ -1,4 +1,5 @@
 import sys
+import time
 import spandrel 
 from torchvision import transforms
 import torch
@@ -14,6 +15,17 @@ import asyncio
 import cProfile
 import pstats
 import io
+
+paused = False
+stop = False
+
+def pause():
+    global paused
+    paused = not paused
+
+def stop():
+    global stop
+    stop = True
 
 # Define collate_fn as a top-level function
 def collate_fn(batch):
@@ -96,7 +108,7 @@ def process_batch(batch, model):
     
     return results
 
-def save_image(result, output_dir):
+def save_image(result, output_dir, move=False):
     output_img, path = result
     base_name = os.path.basename(path)
     out_path = os.path.join(output_dir, base_name)
@@ -106,6 +118,15 @@ def save_image(result, output_dir):
         output_img = torch.flip(output_img, dims=[1])
         pil_img = torch_bgr_to_pil_image(output_img)
         pil_img.save(out_path)
+
+        try:
+            # Move the processed source image to the processed directory
+            processed_dir = os.path.join(os.path.dirname(output_dir), "processed")
+            os.makedirs(processed_dir, exist_ok=True)
+            processed_path = os.path.join(processed_dir, base_name)
+            os.rename(path, processed_path)
+        except Exception as e:
+            print(f"Error moving image {path} to {processed_path}: {e}")
     except Exception as e:
         print(f"Error saving image {out_path}: {e}")
 
@@ -130,6 +151,9 @@ def process_dir(input_dir, output_dir, model):
 
     dataset = [os.path.join(input_dir, f) for f in os.listdir(input_dir) if os.path.isfile(os.path.join(input_dir, f))]
     for img in dataset:
+        while paused:
+            time.sleep(1)
+            
         results = process_single(img, model)
         for result in results:
             save_image(result, output_dir)
@@ -187,7 +211,7 @@ async def async_load_data(dataloader):
         yield await loop.run_in_executor(None, lambda: batch)
 
 @profile_code
-async def process_dataset_async(dataset: FrameDataset, output_dir, model):
+async def process_dataset_async(dataset: FrameDataset, output_dir, model, move=False):
     model = load_model(model)
 
     if model is None:
@@ -205,7 +229,8 @@ async def process_dataset_async(dataset: FrameDataset, output_dir, model):
         async for batch in async_load_data(dataloader):
             results = process_batch(batch, model)
             for result in results:
-                executor.submit(save_image, result, output_dir)
+                executor.submit(save_image, result, output_dir, move)
+                executor.submit(move, result, move)
                 progress_bar.update(1)
             print(f"Processed batch {count}")
             count += 1

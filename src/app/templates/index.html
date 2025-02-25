@@ -5,6 +5,24 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Video Upscaling Workflow</title>
     <style>
+        :root {
+            --bg-color: #f0f0f0;
+            --text-color: #000;
+            --button-bg-color: #4CAF50;
+            --button-hover-bg-color: #367c39;
+            --input-bg-color: white;
+            --display-bg-color: #e9ecef;
+        }
+
+        [data-theme="dark"] {
+            --bg-color: #333;
+            --text-color: #fff;
+            --button-bg-color: #539165;
+            --button-hover-bg-color: #8BC34A;
+            --input-bg-color: #444;
+            --display-bg-color: #555;
+        }
+
         body {
             font-family: sans-serif;
             margin: 0;
@@ -12,7 +30,8 @@
             display: flex;
             flex-direction: column;
             align-items: center;
-            background-color: #f0f0f0;
+            background-color: var(--bg-color);
+            color: var(--text-color);
         }
 
         .button-row {
@@ -30,8 +49,8 @@
             margin: 10px;
             font-size: 1.2em;
             text-align: center;
-            background-color: #4CAF50;
-            color: white;
+            background-color: var(--button-bg-color);
+            color: var(--text-color);
             border: none;
             cursor: pointer;
             box-shadow: 0 4px 8px rgba(0,0,0,0.1);
@@ -40,7 +59,7 @@
         }
 
         .command-button:hover {
-            background-color: #367c39;
+            background-color: var(--button-hover-bg-color);
         }
 
         .command-button.active {
@@ -51,7 +70,8 @@
             width: 80%;
             padding: 20px;
             margin-top: 20px;
-            background-color: white;
+            background-color: var(--input-bg-color);
+            color: var(--text-color);
             box-shadow: 0 4px 8px rgba(0,0,0,0.1);
             border-radius: 8px;
             box-sizing: border-box;
@@ -74,6 +94,8 @@
             border-radius: 4px;
             box-sizing: border-box;
             font-size: 1em;
+            color: var(--text-color);
+            background-color: var(--input-bg-color);
         }
 
         .submit-button {
@@ -95,7 +117,8 @@
             width: 80%;
             margin-top: 20px;
             padding: 20px;
-            background-color: #e9ecef;
+            background-color: var(--display-bg-color);
+            color: var(--text-color);
             border-radius: 8px;
             box-shadow: 0 2px 4px rgba(0,0,0,0.1);
             box-sizing: border-box;
@@ -109,6 +132,7 @@
 </head>
 <body>
     <h1>Video Upscaling Workflow</h1>
+    <button id="theme-toggle">Toggle Dark Mode</button>
 
     <div class="button-row" id="button-row">
         <!-- Buttons will be dynamically added here -->
@@ -118,6 +142,8 @@
         <form id="command-form">
             <!-- Input fields will be dynamically added here -->
             <button type="submit" class="submit-button">Submit</button>
+            <button type="button" id="pause-button" class="submit-button" style="display: false;">Pause</button>
+            <button type="button" id="stop-button" class="submit-button" style="display: false;">Stop</button>
         </form>
     </div>
 
@@ -141,6 +167,10 @@
 
         let activeButton = null; // Keep track of the active button
 
+        // Get references to the pause and stop buttons outside the submit event listener
+        const pauseButton = document.getElementById('pause-button');
+        const stopButton = document.getElementById('stop-button');
+
         for (const [command, args] of Object.entries(commands)) {
             const button = document.createElement('button');
             button.classList.add('command-button');
@@ -153,6 +183,9 @@
                 if (activeButton) {
                     activeButton.classList.remove('active');
                 }
+
+                pauseButton.style.display = false // .classList.remove('hidden');
+                stopButton.style.display = false
 
                 // Activate the current button
                 button.classList.add('active');
@@ -185,13 +218,21 @@
 
                 commandForm.addEventListener('submit', function(event) {
                     event.preventDefault(); // Prevent the default form submission
+                    submitButton.disabled = true; // Disable the form to prevent multiple submissions
+                    buttonRow.disabled = true;
+                    
+                    // Show pause and stop buttons only for the "upscale" command
+                    if (activeButton.dataset.command === 'upscale') {
+                        pauseButton.style.display = "" // .classList.remove('hidden');
+                        stopButton.style.display = ""// .classList.remove('hidden');
+                    } 
 
                     const formData = new FormData(commandForm);
                     const values = {};
                     for (const [key, value] of formData.entries()) {
                         values[key] = value;
                     }
-
+                    displayArea.textContent = 'Initiating command...';
                     // Send the command and arguments to the Flask backend
                     fetch('/run_command', {
                         method: 'POST',
@@ -211,9 +252,85 @@
                     .catch(error => {
                         console.error('Error:', error);
                         displayArea.textContent = 'An error occurred while running the command.';
+                    })
+                    .finally(() => {
+                        //submitButton.disabled = false; // Re-enable the form
                     });
                 });
             });
+        }
+
+        // Pause button functionality
+        pauseButton.addEventListener('click', () => {
+            pauseButton.disabled = true;
+            displayArea.textContent = 'Pausing...';
+            fetch('/pause')
+                .then(response => {
+                    if (response.ok) {
+                        pauseButton.textContent = 'Unpause';
+                        displayArea.textContent = 'Paused';
+                    } else {
+                        displayArea.textContent = 'Unable to pause.';
+                    }
+                })
+                .catch(error => {
+                    console.error('Error:', error);
+                    displayArea.textContent = 'An error occurred while pausing.';
+                })
+                .finally(() => {
+                    pauseButton.disabled = false;
+                });
+        });
+
+        // Stop button functionality
+        stopButton.addEventListener('click', () => {
+            submitButton.disabled = true;
+            pauseButton.disabled = true;
+            stopButton.disabled = true;
+            displayArea.textContent = 'Stopping...';
+            fetch('/stop')
+                .then(response => {
+                    if (response.ok) {
+                        displayArea.textContent = 'Stopped';
+                        pauseButton.classList.add('hidden');
+                        stopButton.classList.add('hidden');
+                        submitButton.disabled = false;
+                    } else {
+                        displayArea.textContent = 'Unable to stop.';
+                    }
+                })
+                .catch(error => {
+                    console.error('Error:', error);
+                    displayArea.textContent = 'An error occurred while stopping.';
+                })
+                .finally(() => {
+                    pauseButton.disabled = false;
+                    stopButton.disabled = false;
+                });
+        });
+
+        const themeToggle = document.getElementById('theme-toggle');
+        const body = document.body;
+
+        // Function to set the theme
+        function setTheme(theme) {
+            document.documentElement.setAttribute('data-theme', theme);
+            localStorage.setItem('theme', theme);
+        }
+
+        // Event listener for the theme toggle button
+        themeToggle.addEventListener('click', () => {
+            if (document.documentElement.getAttribute('data-theme') === 'dark') {
+                setTheme('light');
+            } else {
+                setTheme('dark');
+            }
+        });
+
+        // Check for saved theme in local storage on page load
+        const savedTheme = localStorage.getItem('theme');
+        if (savedTheme) {
+            setTheme(savedTheme);
         }
     </script>
 </body>

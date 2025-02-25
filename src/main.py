@@ -2,7 +2,7 @@ import asyncio
 import os
 import glob
 import sys
-from archive.move_processed import move
+from archive.move_processed import move, move_processed
 from chapters.extract_chapters import extract_chapters
 from frame_extraction.extract_frames import extract_frames
 from upscaler import upscale_spandrel, FrameDataset
@@ -34,7 +34,7 @@ def main(command, *args):
 
         # upscale_spandrel.process_dir(input_dir, output_dir)
         dataset = FrameDataset(input_dir)
-        asyncio.run(upscale_spandrel.process_dataset_async(dataset, output_dir, models["RealESRGAN_x4plus"]))
+        asyncio.run(upscale_spandrel.process_dataset_async(dataset, output_dir, models["RealESRGAN_x4plus"], move=True))
         upscale_spandrel.process_dataset(dataset, output_dir)
         return "Done upscaling images!"
     elif command == "chapters":
@@ -51,6 +51,7 @@ def main(command, *args):
         extract_frames(input_file, aspect_ratio)
         return "Done extracting frames!"
     elif command == "encode":
+        print(args)
         if len(args) < 5:
             return "Usage: python main.py encode <input_frame_dir> <input_video_dir> <output_dir> <archive_flag> <youtube_flag>"
         input_frames = args[0]
@@ -66,7 +67,7 @@ def main(command, *args):
         input_dir = args[0]
         processed_dir = args[1]
         output_dir = args[2]
-        move(input_dir, processed_dir, output_dir)
+        move_processed(input_dir, processed_dir, output_dir)
         return "Done archiving processed frames!"
     else:
         return f"Unknown command '{command}'"

@@ -2,7 +2,7 @@ import os
 import shutil
 import sys
 
-def move(input_dir, processed_dir, output_dir):
+def move_processed(input_dir, processed_dir, output_dir):
     
     os.makedirs(processed_dir, exist_ok=True)
 
@@ -17,4 +17,14 @@ def move(input_dir, processed_dir, output_dir):
         if os.path.exists(source_path):
             shutil.move(source_path, dest_path)
             print(f"Moved: {image} → {processed_dir}")
+
+def move(input_path, processed_dir):
+    
+    os.makedirs(processed_dir, exist_ok=True)
+    image = os.path.basename(input_path)
+    dest_path = os.path.join(processed_dir, image)
+
+    if os.path.exists(input_path):
+        shutil.move(input_path, dest_path)
+        print(f"Moved: {image} → {processed_dir}")
 
