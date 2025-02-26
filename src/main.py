@@ -5,7 +5,7 @@ import sys
 from archive.move_processed import move, move_processed
 from chapters.extract_chapters import extract_chapters
 from frame_extraction.extract_frames import extract_frames
-from upscaler import upscale_spandrel, FrameDataset
+from upscaler import upscale_spandrel, chainner, FrameDataset
 from encoding.encoder import encode
 
 # Get the directory of the current script
@@ -36,6 +36,15 @@ def main(command, *args):
         dataset = FrameDataset(input_dir)
         asyncio.run(upscale_spandrel.process_dataset_async(dataset, output_dir, models["RealESRGAN_x4plus"], move=True))
         upscale_spandrel.process_dataset(dataset, output_dir)
+        return "Done upscaling images!"
+    elif command == "chainner":
+        if len(args) < 2:
+            return "Usage: python main.py chainner <input_dir> <output_dir>"
+        print("Upscaling with ChaiNNer")
+        input_dir = args[0]
+        output_dir = args[1]
+        os.makedirs(output_dir, exist_ok=True)
+        chainner.upscale(dataset, output_dir)
         return "Done upscaling images!"
     elif command == "chapters":
         if len(args) < 1:

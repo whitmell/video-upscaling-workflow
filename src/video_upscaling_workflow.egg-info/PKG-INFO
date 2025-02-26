@@ -1,3 +1,16 @@
 Metadata-Version: 2.2
 Name: video-upscaling-workflow
 Version: 0.1.0
+Requires-Dist: asyncio
+Requires-Dist: numpy
+Requires-Dist: pillow==11.0.0
+Requires-Dist: spandrel
+Requires-Dist: fastapi
+Requires-Dist: pydantic
+Requires-Dist: redis
+Requires-Dist: rq
+Requires-Dist: tqdm==4.66.5
+Requires-Dist: Flask[async]
+Requires-Dist: gunicorn
+Requires-Dist: uvicorn[standard]
+Dynamic: requires-dist

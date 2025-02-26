@@ -1,5 +1,7 @@
 README.md
 setup.py
+src/api/__init__.py
+src/api/fast_app.py
 src/app/__init__.py
 src/app/routes.py
 src/chapters/__init__.py
@@ -9,11 +11,14 @@ src/encoding/encoder.py
 src/frame_extraction/__init__.py
 src/frame_extraction/extract_frames.py
 src/upscaler/__init__.py
+src/upscaler/chainner.py
 src/upscaler/image.py
+src/upscaler/upscale_batch.py
 src/upscaler/upscale_realesrgan.py
 src/upscaler/upscale_spandrel.py
 src/video_upscaling_workflow.egg-info/PKG-INFO
 src/video_upscaling_workflow.egg-info/SOURCES.txt
 src/video_upscaling_workflow.egg-info/dependency_links.txt
 src/video_upscaling_workflow.egg-info/entry_points.txt
+src/video_upscaling_workflow.egg-info/requires.txt
 src/video_upscaling_workflow.egg-info/top_level.txt

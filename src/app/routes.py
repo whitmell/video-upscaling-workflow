@@ -18,11 +18,39 @@ sys.path.append(src_dir)
 
 async def execute_command(command, *args):
     """
-    Asynchronously executes the command.
+    Asynchronously executes the command and prints output to console in real-time.
     """
-    loop = asyncio.get_event_loop()
-    output = await loop.run_in_executor(None, main_function, command, *args)
-    return output
+    # loop = asyncio.get_event_loop()
+    # output = await loop.run_in_executor(None, main_function, command, *args)
+    
+
+    cmd = [command] + list(args)
+    process = await asyncio.create_subprocess_exec(
+        sys.executable,
+        '-m',
+        'commands',         # Replace 'commands' with your module if needed
+        command,
+        *args,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE
+    )
+
+    async def stream_output(stream, prefix):
+        while True:
+            line = await stream.readline()
+            if not line:
+                break
+            print(f"{prefix}: {line.decode().strip()}")
+
+    # Create tasks to stream stdout and stderr
+    stdout_task = asyncio.create_task(stream_output(process.stdout, "STDOUT"))
+    stderr_task = asyncio.create_task(stream_output(process.stderr, "STDERR"))
+
+    # Wait for the process to complete
+    await process.wait()
+    await asyncio.gather(stdout_task, stderr_task)
+
+    return f"Command completed with return code: {process.returncode}"
 
 @app.route('/')
 def index():

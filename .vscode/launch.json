@@ -9,6 +9,28 @@
             "type": "debugpy",
             "request": "launch",
             "program": "${workspaceFolder}/.venv/Scripts/runvid.exe"
+        },
+        {
+            "name": "FastAPI",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "uvicorn",
+            "args": [
+                "--port",
+                "8000",
+                "--reload",
+                "--workers",
+                "3",
+                "--log-level",
+                "debug",
+                "src.api.fast_app:app"
+            ],
+            "jinja": false
+          }
+    ],
+    "tasks": [
+        {
+            
         }
     ]
 }

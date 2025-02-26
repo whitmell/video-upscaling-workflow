@@ -1,5 +1,6 @@
 **/.venv
 **/venv
+venvy
 **/__pycache__
 build/lib/app/__init__.py
 build/lib/app/routes.py

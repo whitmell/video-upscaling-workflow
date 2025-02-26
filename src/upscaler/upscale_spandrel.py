@@ -1,6 +1,6 @@
 import sys
 import time
-import spandrel 
+import spandrel
 from torchvision import transforms
 import torch
 from PIL import Image
@@ -15,6 +15,7 @@ import asyncio
 import cProfile
 import pstats
 import io
+from queue import Queue
 
 paused = False
 stop = False
@@ -27,7 +28,13 @@ def stop():
     global stop
     stop = True
 
-# Define collate_fn as a top-level function
+def load_model(model_path):
+    # load the model
+    m = spandrel.ModelLoader().load_from_file(model_path)
+    assert isinstance(m, spandrel.ImageModelDescriptor)
+    m.cuda().eval()
+    return m
+
 def collate_fn(batch):
     return batch
 
@@ -42,13 +49,13 @@ def perform_inference(model, image):
         transforms.ToTensor(),
         transforms.Lambda(lambda x: x.unsqueeze(0))  # Add batch dimension
     ])
-    
+
     # Preprocess the image
     input_tensor = transform(image).cuda()
-    
+
     # Perform inference
     output_tensor = model(input_tensor)
-    
+
     # Postprocess the output
     output_image = transforms.ToPILImage()(output_tensor.squeeze(0))
     return output_image
@@ -81,21 +88,22 @@ def torch_bgr_to_pil_image(tensor: torch.Tensor) -> Image.Image:
 
 def process_single(path, model):
 
-    image = cv2.imread(path, cv2.IMREAD_UNCHANGED)       
+    image = cv2.imread(path, cv2.IMREAD_UNCHANGED)
     image_tensor = pil_image_to_torch_bgr(image)
 
     output_img = process(image_tensor, model)
-    
+
     return [(output_img, path)]
 
 
-def process_batch(batch, model):
+def process_batch(batch, model, loop):
     images = []
     paths = []
 
     for path in batch:
-         
-        image = cv2.imread(path, cv2.IMREAD_UNCHANGED)       
+        print(path)
+        future = asyncio.ensure_future(read_image_async(path, loop))
+        image = asyncio.run(future)
         image_tensor = pil_image_to_torch_bgr(image)
         images.append(image_tensor)
         paths.append(path)
@@ -105,8 +113,11 @@ def process_batch(batch, model):
     for i in range(len(paths)):
         output_img = process(images[i], model)
         results.append((output_img, paths[i]))
-    
+
     return results
+
+async def read_image_async(path, loop):
+    return await loop.run_in_executor(None, cv2.imread, path, cv2.IMREAD_UNCHANGED)
 
 def save_image(result, output_dir, move=False):
     output_img, path = result
@@ -133,7 +144,7 @@ def save_image(result, output_dir, move=False):
 
 
 # use the model
-    
+
 def process_dir(input_dir, output_dir, model):
 
     model = load_model(model)
@@ -141,26 +152,26 @@ def process_dir(input_dir, output_dir, model):
     if model is None:
         print("Model is not loaded. Exiting...")
         return
-    
+
     total_files = len([f for f in os.listdir(input_dir) if os.path.isfile(os.path.join(input_dir, f))])
-    
+
     print(f"Starting batch processing of {total_files} files...")
     progress_bar = tqdm(total=total_files, desc="Processing images")
-    
+
     count = 1
 
     dataset = [os.path.join(input_dir, f) for f in os.listdir(input_dir) if os.path.isfile(os.path.join(input_dir, f))]
     for img in dataset:
         while paused:
             time.sleep(1)
-            
+
         results = process_single(img, model)
         for result in results:
             save_image(result, output_dir)
             progress_bar.update(1)
         print(f"Processed image {count}")
         count += 1
-    
+
     progress_bar.close()
     print("Processing complete!")
 
@@ -171,13 +182,13 @@ def process_dataset(dataset: FrameDataset, output_dir, model):
     if model is None:
         print("Model is not loaded. Exiting...")
         return
-    
+
     dataloader = DataLoader(dataset, batch_size=8, shuffle=False, num_workers=8, pin_memory=True, collate_fn=collate_fn)
     total_files = len(dataset)
-    
+
     print(f"Starting batch processing of {total_files} files...")
     progress_bar = tqdm(total=total_files, desc="Processing images")
-    
+
     count = 1
     with ThreadPoolExecutor(max_workers=8) as executor:  # Increased max_workers
         for batch in dataloader:
@@ -187,7 +198,7 @@ def process_dataset(dataset: FrameDataset, output_dir, model):
                 progress_bar.update(1)
             print(f"Processed batch {count}")
             count += 1
-    
+
     progress_bar.close()
     print("Processing complete!")
 
@@ -205,51 +216,62 @@ def profile_code(func):
         return result
     return wrapper
 
-async def async_load_data(dataloader):
-    loop = asyncio.get_event_loop()
+async def async_load_data(dataloader, data_queue):
     for batch in dataloader:
-        yield await loop.run_in_executor(None, lambda: batch)
+        await data_queue.put(batch)
 
 @profile_code
 async def process_dataset_async(dataset: FrameDataset, output_dir, model, move=False):
+    print("Loading model...")
+    
     model = load_model(model)
 
     if model is None:
         print("Model is not loaded. Exiting...")
         return
-    
-    dataloader = DataLoader(dataset, batch_size=16, shuffle=False, num_workers=16, pin_memory=True, collate_fn=collate_fn)
+
+    dataloader = DataLoader(dataset, batch_size=16, shuffle=False, num_workers=0, pin_memory=True, collate_fn=collate_fn)
     total_files = len(dataset)
-    
+
     print(f"Starting batch processing of {total_files} files...")
     progress_bar = tqdm(total=total_files, desc="Processing images")
-    
-    count = 1
-    with ThreadPoolExecutor(max_workers=16) as executor:
-        async for batch in async_load_data(dataloader):
-            results = process_batch(batch, model)
-            for result in results:
-                executor.submit(save_image, result, output_dir, move)
-                executor.submit(move, result, move)
-                progress_bar.update(1)
-            print(f"Processed batch {count}")
-            count += 1
-    
+
+    loop = asyncio.get_event_loop()
+    data_queue = asyncio.Queue(maxsize=4)  # Limit queue size to prevent excessive memory usage
+
+    # Start loading data asynchronously
+    asyncio.create_task(async_load_data(dataloader, data_queue))
+
+    with ThreadPoolExecutor(max_workers=8) as save_executor, \
+            ThreadPoolExecutor(max_workers=4) as move_executor:
+        count = 1
+        while count <= len(dataset):
+            try:
+                batch = await asyncio.wait_for(data_queue.get(), timeout=1.0)  # Timeout to handle empty queue
+                data_queue.task_done()
+                results = process_batch(batch, model, loop)
+                for result in results:
+                    save_executor.submit(save_image, result, output_dir, move)
+                    if move:
+                        move_executor.submit(move, result, move)
+                    progress_bar.update(1)
+                print(f"Processed batch {count}")
+                count += 1
+            except asyncio.TimeoutError:
+                print("Queue is empty, waiting...")
+                if data_queue.empty():
+                    break
+
     progress_bar.close()
     print("Processing complete!")
 
-def load_model(model_path):
-    # load the model
-    m = spandrel.ModelLoader().load_from_file(model_path)
-    assert isinstance(m, spandrel.ImageModelDescriptor)
-    m.cuda().eval()
-    return m
+
 
 if __name__ == "__main__":
     if len(sys.argv) < 3:
         print("Usage: python upscale_spandrel.py <dataset_path> <output_dir> <model_path>")
         sys.exit(1)
-    
+
     dataset_path = sys.argv[1]
     output_dir = sys.argv[2]
     model_path = sys.argv[3]

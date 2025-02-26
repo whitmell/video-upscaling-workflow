@@ -19,7 +19,18 @@ setup(
     package_dir={'': 'src'},
     packages=find_packages(where=f"{os.path.join(here, 'src')}"),
     install_requires=[
-        # must run pip install -r src/requirements.txt
+        'asyncio',
+        'numpy',
+        'pillow==11.0.0',
+        'spandrel',
+        'fastapi',
+        'pydantic',
+        'redis',
+        'rq',
+        'tqdm==4.66.5',
+        'Flask[async]',
+        'gunicorn',
+        'uvicorn[standard]',
     ],
     entry_points={
         'console_scripts': [

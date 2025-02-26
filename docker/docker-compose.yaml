@@ -1,0 +1,9 @@
+services:
+  redis-vids:
+    image: redis:latest
+    ports:
+      - 6379:6379
+    volumes:
+      - redis-data:/data
+volumes:
+  redis-data:
