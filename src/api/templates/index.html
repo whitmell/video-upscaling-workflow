@@ -152,148 +152,185 @@
     </div>
 
     <script>
-        const commands = {
-            "Chapters": ["Video File"],
-            "Frames": ["Video File", "Aspect Ratio"],
-            "Upscale": ["Input Dir", "Output Dir"],
-            "Archive": ["Input Dir", "Processed Dir", "Output Dir"],
-            "ChaiNNer": ["Input Dir", "Output Dir"],
-            "Encode": ["Input Frame Dir", "Input Video Dir", "Output Dir", "Archive Flag", "Youtube Flag"]
-        };
+    const commands = {
+        "Chapters": ["Video File"],
+        "Frames": ["Video File", "Aspect Ratio"],
+        "Upscale": ["Input Dir", "Output Dir"],
+        "Archive": ["Input Dir", "Processed Dir", "Output Dir"],
+        "ChaiNNer": ["Input Dir", "Output Dir"],
+        "Encode": ["Input Frame Dir", "Input Video Dir", "Output Dir", "Archive Flag", "Youtube Flag"]
+    };
 
-        const buttonRow = document.getElementById('button-row');
-        const inputArea = document.getElementById('input-area');
-        const commandForm = document.getElementById('command-form');
-        const displayArea = document.getElementById('display-area');
+    const buttonRow = document.getElementById('button-row');
+    const inputArea = document.getElementById('input-area');
+    const commandForm = document.getElementById('command-form');
+    const displayArea = document.getElementById('display-area');
+    const pauseButton = document.getElementById('pause-button');
+    const stopButton = document.getElementById('stop-button');
 
-        let activeButton = null; // Keep track of the active button
+    let activeButton = null; // Keep track of the active button
 
-        // Get references to the pause and stop buttons outside the submit event listener
+    // Create command buttons
+    for (const [command, args] of Object.entries(commands)) {
+        const button = document.createElement('button');
+        button.classList.add('command-button');
+        button.textContent = command;
+        button.dataset.command = command.toLowerCase();
+        buttonRow.appendChild(button);
+
+        button.addEventListener('click', () => {
+            // Deactivate the previous button
+            if (activeButton) {
+                activeButton.classList.remove('active');
+            }
+
+            // Activate the current button
+            button.classList.add('active');
+            activeButton = button;
+
+            inputArea.classList.remove('hidden');
+            
+            // Clear previous inputs and recreate the form
+            commandForm.innerHTML = '';
+
+            args.forEach(arg => {
+                const inputGroup = document.createElement('div');
+                inputGroup.classList.add('input-group');
+
+                const label = document.createElement('label');
+                label.textContent = arg;
+                inputGroup.appendChild(label);
+
+                const input = document.createElement('input');
+                input.type = "text";
+                input.name = arg.toLowerCase().replace(/ /g, '_');
+                inputGroup.appendChild(input);
+
+                commandForm.appendChild(inputGroup);
+            });
+
+            // Add submit button
+            const submitButton = document.createElement('button');
+            submitButton.type = "submit";
+            submitButton.classList.add('submit-button');
+            submitButton.textContent = "Submit";
+            commandForm.appendChild(submitButton);
+            
+            // Add the pause and stop buttons (initially hidden)
+            if (!document.getElementById('pause-button')) {
+                const pauseBtn = document.createElement('button');
+                pauseBtn.type = "button";
+                pauseBtn.id = "pause-button";
+                pauseBtn.classList.add('submit-button', 'hidden');
+                pauseBtn.textContent = "Pause";
+                commandForm.appendChild(pauseBtn);
+            }
+            
+            if (!document.getElementById('stop-button')) {
+                const stopBtn = document.createElement('button');
+                stopBtn.type = "button";
+                stopBtn.id = "stop-button";
+                stopBtn.classList.add('submit-button', 'hidden');
+                stopBtn.textContent = "Stop";
+                commandForm.appendChild(stopBtn);
+            }
+        });
+    }
+
+    // IMPORTANT: Form submission handler attached just ONCE, outside the button click handler
+    commandForm.addEventListener('submit', function(event) {
+        event.preventDefault(); // Prevent the default form submission
+        
+        if (!activeButton) return; // Make sure a button is active
+        
+        const submitButton = event.submitter;
+        submitButton.disabled = true; // Disable the submit button
+        
+        // Show pause and stop buttons only for the "Encode" command
         const pauseButton = document.getElementById('pause-button');
         const stopButton = document.getElementById('stop-button');
-
-        for (const [command, args] of Object.entries(commands)) {
-            const button = document.createElement('button');
-            button.classList.add('command-button');
-            button.textContent = command;
-            button.dataset.command = command.toLowerCase();
-            buttonRow.appendChild(button);
-
-            button.addEventListener('click', () => {
-                // Deactivate the previous button
-                if (activeButton) {
-                    activeButton.classList.remove('active');
-                }
-
-                // Activate the current button
-                button.classList.add('active');
-                activeButton = button;
-
-                inputArea.classList.remove('hidden');
-                commandForm.innerHTML = ''; // Clear previous inputs
-
-                args.forEach(arg => {
-                    const inputGroup = document.createElement('div');
-                    inputGroup.classList.add('input-group');
-
-                    const label = document.createElement('label');
-                    label.textContent = arg;
-                    inputGroup.appendChild(label);
-
-                    const input = document.createElement('input');
-                    input.type = "text";
-                    input.name = arg.toLowerCase().replace(/ /g, '_');
-                    inputGroup.appendChild(input);
-
-                    commandForm.appendChild(inputGroup);
-                });
-
-                const submitButton = document.createElement('button');
-                submitButton.type = "submit";
-                submitButton.classList.add('submit-button');
-                submitButton.textContent = "Submit";
-                commandForm.appendChild(submitButton);
-
-                commandForm.addEventListener('submit', function(event) {
-                    event.preventDefault(); // Prevent the default form submission
-                    submitButton.disabled = true; // Disable the form to prevent multiple submissions
-
-                    // Show pause and stop buttons only for the "Encode" command
-                    if (activeButton.dataset.command === 'encode') {
-                        pauseButton.classList.remove('hidden');
-                        stopButton.classList.remove('hidden');
-                    } else {
-                        pauseButton.classList.add('hidden');
-                        stopButton.classList.add('hidden');
-                    }
-
-                    const formData = new FormData(commandForm);
-                    const values = {};
-                    for (const [key, value] of formData.entries()) {
-                        values[key] = value;
-                    }
-                    displayArea.textContent = 'Running command...';
-                    // Send the command and arguments to the Flask backend
-                    fetch('/run_command', {
-                        method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json'
-                        },
-                        body: JSON.stringify({
-                            command: activeButton.dataset.command, // Use the active button's command
-                            args: Object.values(values)
-                        })
-                    })
-                    .then(response => response.json())
-                    .then(data => {
-                        // Display the output from the backend
-                        displayArea.textContent = data.output || data.error;
-                    })
-                    .catch(error => {
-                        console.error('Error:', error);
-                        displayArea.textContent = 'An error occurred while running the command.';
-                    })
-                    .finally(() => {
-                        submitButton.disabled = false; // Re-enable the form
-                    });
-                });
-            });
+        
+        if (activeButton.dataset.command === 'encode') {
+            pauseButton.classList.remove('hidden');
+            stopButton.classList.remove('hidden');
+        } else {
+            pauseButton.classList.add('hidden');
+            stopButton.classList.add('hidden');
         }
 
-        // Pause button functionality
-        pauseButton.addEventListener('click', () => {
-            pauseButton.disabled = true;
+        const formData = new FormData(commandForm);
+        const values = {};
+        for (const [key, value] of formData.entries()) {
+            values[key] = value;
+        }
+        
+        displayArea.textContent = 'Running command...';
+        
+        // Send the command and arguments to the backend
+        fetch('/run_command', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                command: activeButton.dataset.command,
+                args: Object.values(values)
+            })
+        })
+        .then(response => response.json())
+        .then(data => {
+            displayArea.textContent = data.output || data.status || data.error || JSON.stringify(data);
+        })
+        .catch(error => {
+            console.error('Error:', error);
+            displayArea.textContent = 'An error occurred while running the command.';
+        })
+        .finally(() => {
+            submitButton.disabled = false; // Re-enable the form
+        });
+    });
+
+    // Pause button functionality
+    document.body.addEventListener('click', function(event) {
+        if (event.target && event.target.id === 'pause-button') {
+            event.target.disabled = true;
             displayArea.textContent = 'Pausing...';
             fetch('/pause')
                 .then(response => {
                     if (response.ok) {
-                        pauseButton.textContent = 'Unpause';
-                        displayArea.textContent = 'Paused';
+                        event.target.textContent = event.target.textContent === 'Pause' ? 'Unpause' : 'Pause';
+                        displayArea.textContent = event.target.textContent === 'Pause' ? 'Unpaused' : 'Paused';
                     } else {
-                        displayArea.textContent = 'Unable to pause.';
+                        displayArea.textContent = 'Unable to pause/unpause.';
                     }
                 })
                 .catch(error => {
                     console.error('Error:', error);
-                    displayArea.textContent = 'An error occurred while pausing.';
+                    displayArea.textContent = 'An error occurred while pausing/unpausing.';
                 })
                 .finally(() => {
-                    pauseButton.disabled = false;
+                    event.target.disabled = false;
                 });
-        });
+        }
+    });
 
-        // Stop button functionality
-        stopButton.addEventListener('click', () => {
+    // Stop button functionality
+    document.body.addEventListener('click', function(event) {
+        if (event.target && event.target.id === 'stop-button') {
+            const submitButton = commandForm.querySelector('button[type="submit"]');
+            const pauseButton = document.getElementById('pause-button');
+            
             submitButton.disabled = true;
             pauseButton.disabled = true;
-            stopButton.disabled = true;
+            event.target.disabled = true;
+            
             displayArea.textContent = 'Stopping...';
             fetch('/stop')
                 .then(response => {
                     if (response.ok) {
                         displayArea.textContent = 'Stopped';
                         pauseButton.classList.add('hidden');
-                        stopButton.classList.add('hidden');
+                        event.target.classList.add('hidden');
                         submitButton.disabled = false;
                     } else {
                         displayArea.textContent = 'Unable to stop.';
@@ -305,33 +342,33 @@
                 })
                 .finally(() => {
                     pauseButton.disabled = false;
-                    stopButton.disabled = false;
+                    event.target.disabled = false;
                 });
-        });
-
-        const themeToggle = document.getElementById('theme-toggle');
-        const body = document.body;
-
-        // Function to set the theme
-        function setTheme(theme) {
-            document.documentElement.setAttribute('data-theme', theme);
-            localStorage.setItem('theme', theme);
         }
+    });
 
-        // Event listener for the theme toggle button
-        themeToggle.addEventListener('click', () => {
-            if (document.documentElement.getAttribute('data-theme') === 'dark') {
-                setTheme('light');
-            } else {
-                setTheme('dark');
-            }
-        });
+    const themeToggle = document.getElementById('theme-toggle');
 
-        // Check for saved theme in local storage on page load
-        const savedTheme = localStorage.getItem('theme');
-        if (savedTheme) {
-            setTheme(savedTheme);
+    // Function to set the theme
+    function setTheme(theme) {
+        document.documentElement.setAttribute('data-theme', theme);
+        localStorage.setItem('theme', theme);
+    }
+
+    // Event listener for the theme toggle button
+    themeToggle.addEventListener('click', () => {
+        if (document.documentElement.getAttribute('data-theme') === 'dark') {
+            setTheme('light');
+        } else {
+            setTheme('dark');
         }
-    </script>
+    });
+
+    // Check for saved theme in local storage on page load
+    const savedTheme = localStorage.getItem('theme');
+    if (savedTheme) {
+        setTheme(savedTheme);
+    }
+</script>
 </body>
 </html>

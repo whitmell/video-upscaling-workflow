@@ -65,7 +65,7 @@ async def run_command(request_data: CommandRequest):
         # Direct upscaling without queues or workers
         input_dir = args[0]
         output_dir = args[1]
-        move = len(args) > 2 and args[2].lower() == "true"
+        move = True
         
         # Process directory directly with the preloaded upscaler
         if upscaler:

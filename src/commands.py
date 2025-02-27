@@ -3,7 +3,7 @@ import asyncio
 import os
 import glob
 import sys
-from archive.move_processed import move
+from archive.move_processed import move, move_processed
 from chapters.extract_chapters import extract_chapters
 from frame_extraction.extract_frames import extract_frames
 from upscaler import chainner, upscale_spandrel, FrameDataset
@@ -76,7 +76,7 @@ def main(command, *args):
         input_dir = args[0]
         processed_dir = args[1]
         output_dir = args[2]
-        move(input_dir, processed_dir, output_dir)
+        move_processed(input_dir, processed_dir, output_dir)
         return "Done archiving processed frames!"
     else:
         return f"Unknown command '{command}'"
