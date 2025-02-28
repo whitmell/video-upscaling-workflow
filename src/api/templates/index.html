@@ -169,6 +169,7 @@
     const stopButton = document.getElementById('stop-button');
 
     let activeButton = null; // Keep track of the active button
+    let statusPollingInterval = null; // Variable to store the polling interval ID
 
     // Create command buttons
     for (const [command, args] of Object.entries(commands)) {
@@ -264,7 +265,7 @@
             values[key] = value;
         }
         
-        displayArea.textContent = 'Running command...';
+        displayArea.textContent = 'Starting command...';
         
         // Send the command and arguments to the backend
         fetch('/run_command', {
@@ -279,16 +280,71 @@
         })
         .then(response => response.json())
         .then(data => {
-            displayArea.textContent = data.output || data.status || data.error || JSON.stringify(data);
+            // Display initial status message
+            displayArea.textContent = data.message || data.status || 'Command started';
+            
+            // Start polling for status updates if appropriate
+            if(activeButton.dataset.command === 'upscale') {
+                startStatusPolling();
+            } else {
+                // For other commands that return immediate results
+                if (data.output) {
+                    displayArea.textContent = data.output;
+                } else if (data.error) {
+                    displayArea.textContent = `Error: ${data.error}`;
+                }
+                
+                // Re-enable the form for non-polling commands
+                submitButton.disabled = false;
+            }
         })
         .catch(error => {
             console.error('Error:', error);
-            displayArea.textContent = 'An error occurred while running the command.';
-        })
-        .finally(() => {
-            submitButton.disabled = false; // Re-enable the form
+            displayArea.textContent = 'An error occurred while starting the command.';
+            submitButton.disabled = false; // Re-enable the form on error
         });
     });
+
+    // Function to start polling for status updates
+    function startStatusPolling() {
+        // Clear any existing polling interval
+        if (statusPollingInterval) {
+            clearInterval(statusPollingInterval);
+        }
+        
+        // Poll every 30s
+        statusPollingInterval = setInterval(pollStatus, 30000);
+    }
+    
+    // Function to poll the status endpoint
+    function pollStatus() {
+        fetch('/status')
+            .then(response => response.json())
+            .then(data => {
+                // Update display with status message
+                if (data.message) {
+                    displayArea.textContent = data.message;
+                }
+                
+                // If status is idle, stop polling
+                if (data.status === 'idle') {
+                    clearInterval(statusPollingInterval);
+                    statusPollingInterval = null;
+                    
+                    // Re-enable the submit button
+                    const submitButton = commandForm.querySelector('button[type="submit"]');
+                    if (submitButton) {
+                        submitButton.disabled = false;
+                    }
+                }
+            })
+            .catch(error => {
+                console.error('Error polling status:', error);
+                // Stop polling on error
+                // clearInterval(statusPollingInterval);
+                // statusPollingInterval = null;
+            });
+    }
 
     // Pause button functionality
     document.body.addEventListener('click', function(event) {
@@ -332,6 +388,12 @@
                         pauseButton.classList.add('hidden');
                         event.target.classList.add('hidden');
                         submitButton.disabled = false;
+                        
+                        // Clear status polling when manually stopped
+                        if (statusPollingInterval) {
+                            clearInterval(statusPollingInterval);
+                            statusPollingInterval = null;
+                        }
                     } else {
                         displayArea.textContent = 'Unable to stop.';
                     }

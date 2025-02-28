@@ -4,13 +4,25 @@ import glob
 import io
 import os
 import cv2
+import json
 import numpy as np
 import spandrel
+import time
 import torch
 from PIL import Image
 from tqdm import tqdm
 
 class BatchUpscaler:
+    # Class variables for status tracking
+    _status = "idle"
+    _message = ""
+    _current_batch = 0
+    _total_batches = 0
+    _processed_files = 0
+    _total_files = 0
+    _start_time = None
+    _last_update_time = None
+
     def __init__(self, model_path=None, num_streams=4):
         """Initialize the BatchUpscaler with a model path and multiple CUDA streams."""
         current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -19,7 +31,9 @@ class BatchUpscaler:
         self.model_path = model_path or self.default_model_path
         self.model = None
         self.streams = [torch.cuda.Stream() for _ in range(num_streams)]
+        self.use_half_precision = torch.cuda.is_available()  # Flag to track precision mode
         self._load_model()
+        self.last_image_memory = 100  # Default estimate in MB
     
     def _load_model(self):
         """Load the AI model into memory with mixed precision."""
@@ -32,8 +46,10 @@ class BatchUpscaler:
             # Enable mixed precision
             if torch.cuda.is_available():
                 self.model = self.model.half()  # Convert to FP16
+                self.use_half_precision = True
                 print("Model loaded with mixed precision")
             else:
+                self.use_half_precision = False
                 print("Model loaded successfully")
         except Exception as e:
             print(f"Error loading model: {e}")
@@ -51,8 +67,8 @@ class BatchUpscaler:
         """Ensure model is unloaded when the object is garbage collected."""
         self.unload_model()
 
-    @staticmethod
-    def pil_image_to_torch_bgr(img):
+    def pil_image_to_torch_bgr(self, img):
+        """Convert PIL image to torch tensor in the correct precision"""
         img = img[:, :, ::-1]  # flip RGB to BGR
         img = np.transpose(img, (2, 0, 1))  # HWC to CHW
         img = np.ascontiguousarray(img) / 255  # Rescale to [0, 1]
@@ -60,6 +76,11 @@ class BatchUpscaler:
         # Use pinned memory for faster CPU->GPU transfer
         tensor = torch.from_numpy(img).unsqueeze(0).float()
         tensor = tensor.pin_memory().to('cuda', non_blocking=True)
+        
+        # Convert to half precision if model uses it
+        if self.use_half_precision:
+            tensor = tensor.half()
+            
         return tensor
 
     @staticmethod
@@ -102,8 +123,45 @@ class BatchUpscaler:
             print(f"Error saving image {output_path}: {e}")
             return False
 
+    def get_status(self):
+        """Get the current processing status as a JSON-serializable dict."""
+        if self._status == "running" and self._start_time and self._processed_files > 0:
+            elapsed = time.time() - self._start_time
+            files_per_sec = self._processed_files / elapsed if elapsed > 0 else 0
+            remaining_files = self._total_files - self._processed_files
+            eta_seconds = remaining_files / files_per_sec if files_per_sec > 0 else 0
+            
+            # Format time as HH:MM:SS
+            eta_formatted = time.strftime('%H:%M:%S', time.gmtime(eta_seconds))
+            
+            message = f"Processing: {self._processed_files}/{self._total_files} " \
+                      f"[{self._processed_files/self._total_files:.1%}] " \
+                      f"({files_per_sec:.2f} img/s, ETA: {eta_formatted})"
+            
+            # Update the message
+            self._message = message
+        
+        return {
+            "status": self._status,
+            "message": self._message,
+            "progress": {
+                "current_batch": self._current_batch,
+                "total_batches": self._total_batches,
+                "processed_files": self._processed_files,
+                "total_files": self._total_files,
+                "percent_complete": round(self._processed_files / self._total_files * 100, 1) if self._total_files > 0 else 0
+            }
+        }
+    
     async def process_directory(self, input_dir, output_dir, move=False, batch_size=16):
         """Process all images in a directory with batching and efficient resource use."""
+        # Reset status tracking variables
+        BatchUpscaler._status = "running"
+        BatchUpscaler._message = "Starting processing..."
+        BatchUpscaler._processed_files = 0
+        BatchUpscaler._start_time = time.time()
+        BatchUpscaler._last_update_time = time.time()
+        
         # Check if model is loaded
         if self.model is None:
             self._load_model()
@@ -111,18 +169,29 @@ class BatchUpscaler:
         # Get all files in input directory
         files = glob.glob(os.path.join(input_dir, '*'))
         total_files = len(files)
+        BatchUpscaler._total_files = total_files
         
         if total_files == 0:
-            print(f"No files found in {input_dir}")
+            BatchUpscaler._status = "idle"
+            BatchUpscaler._message = f"No files found in {input_dir}"
+            print(BatchUpscaler._message)
             return {"status": "completed", "processed": 0, "total": 0}
         
         # Create output directory if it doesn't exist
         os.makedirs(output_dir, exist_ok=True)
         
+        # Optimize batch size based on GPU memory
+        optimal_batch_size = self.get_optimal_batch_size()
+        batch_size = min(batch_size, optimal_batch_size)
+        
         # Create batches
         batches = [files[i:i+batch_size] for i in range(0, len(files), batch_size)]
+        BatchUpscaler._total_batches = len(batches)
         
         print(f"Starting batch processing of {total_files} files...")
+        BatchUpscaler._message = f"Starting batch processing of {total_files} files..."
+        
+        # Custom progress bar that updates our status
         progress = tqdm(total=total_files, desc="Processing images")
         
         processed_count = 0
@@ -130,15 +199,27 @@ class BatchUpscaler:
         
         # Process each batch
         for batch_idx, batch in enumerate(batches):
+            BatchUpscaler._current_batch = batch_idx + 1
+            BatchUpscaler._message = f"Processing batch {batch_idx + 1}/{len(batches)}"
+            
             try:
                 processed = await self._process_batch(batch, output_dir, move)
                 processed_count += processed
+                BatchUpscaler._processed_files += processed
                 progress.update(len(batch))
             except Exception as e:
-                print(f"Error processing batch {batch_idx}: {e}")
+                error_msg = f"Error processing batch {batch_idx}: {e}"
+                print(error_msg)
+                BatchUpscaler._message = error_msg
                 errors.append({"batch": batch_idx, "error": str(e)})
         
         progress.close()
+        
+        # Update status
+        BatchUpscaler._status = "idle"
+        BatchUpscaler._message = f"Completed processing {processed_count} files" + (
+            " with errors" if errors else ""
+        )
         
         return {
             "status": "completed" if not errors else "completed_with_errors",
@@ -146,6 +227,28 @@ class BatchUpscaler:
             "total": total_files,
             "errors": errors
         }
+        
+    def get_optimal_batch_size(self):
+        """Determine optimal batch size based on image size and available VRAM"""
+        # Get free VRAM in bytes
+        free_vram, total_vram = torch.cuda.mem_get_info()
+        free_vram_mb = free_vram / (1024 * 1024)
+        
+        # Estimate memory per image based on recent processing
+        if hasattr(self, 'last_image_memory') and self.last_image_memory > 0:
+            mem_per_image_mb = self.last_image_memory
+        else:
+            # Default conservative estimate (100MB per 1080p image)
+            mem_per_image_mb = 100
+        
+        # Reserve 20% of free memory for overhead
+        usable_memory_mb = free_vram_mb * 0.8
+        
+        # Calculate how many images we can fit
+        max_batch_size = max(1, int(usable_memory_mb / mem_per_image_mb))
+        
+        # Cap at a reasonable maximum
+        return min(16, max_batch_size)
     
     async def _process_batch(self, batch, output_dir, move=False):
         """Process a batch of images with overlapping I/O and GPU operations"""
@@ -166,8 +269,8 @@ class BatchUpscaler:
             try:
                 img, path = await asyncio.wait_for(prefetch_queue.get(), timeout=0.1)
                 if img is not None:
-                    # Preprocess and add to GPU batch
-                    tensor = self.pil_image_to_torch_bgr(img)
+                    # Preprocess and add to GPU batch - Use instance method, not static
+                    tensor = self.pil_image_to_torch_bgr(img)  # Changed from static method
                     gpu_batch.append(tensor)
                     gpu_batch_paths.append(path)
                     
@@ -194,7 +297,7 @@ class BatchUpscaler:
                 results.append((output, out_path, orig_path))
         
         # Save results in parallel
-        with ThreadPoolExecutor(max_workers=16) as save_pool:  # Increased workers for i9
+        with ThreadPoolExecutor(max_workers=16) as save_pool:
             save_futures = []
             for output, out_path, orig_path in results:
                 save_futures.append(

@@ -1,12 +1,13 @@
 # main.py
 from contextlib import asynccontextmanager
 import os
+import asyncio
 from tqdm import tqdm
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, HTTPException, BackgroundTasks
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
-from typing import List
+from typing import List, Dict, Any
 from commands import main as main_function
 from upscaler.upscale_batch import BatchUpscaler
 
@@ -50,38 +51,85 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 
+# Background task storage
+background_tasks = {}
+task_id_counter = 0
+
 @app.get("/", response_class=HTMLResponse)
 def root(request: Request):
     # Serve template/index.html
     return templates.TemplateResponse("index.html", {"request": request})
 
 @app.post("/run_command")
-async def run_command(request_data: CommandRequest):
-    """Run a command based on the request data."""
+async def run_command(request_data: CommandRequest, background_tasks: BackgroundTasks):
+    """Run a command based on the request data and return immediately."""
+    global task_id_counter
     command = request_data.command
     args = request_data.args
     
+    # Generate a unique task ID
+    task_id = task_id_counter
+    task_id_counter += 1
+    
+    response = {
+        "status": "started",
+        "message": f"Command '{command}' started",
+        "task_id": task_id
+    }
+    
     if command == "upscale" and len(args) >= 2:
-        # Direct upscaling without queues or workers
+        # Configure upscaling parameters
         input_dir = args[0]
         output_dir = args[1]
         move = True
         
-        # Process directory directly with the preloaded upscaler
-        if upscaler:
-            result = await upscaler.process_directory(
-                input_dir=input_dir,
-                output_dir=output_dir,
-                move=move,
-                batch_size=BATCH_SIZE
-            )
-            return JSONResponse(content=result)
-        else:
+        if not upscaler:
             return {"error": "Upscaler not initialized"}
+        
+        # Start upscaling in the background
+        background_tasks.add_task(
+            run_upscale_task, 
+            upscaler=upscaler, 
+            input_dir=input_dir, 
+            output_dir=output_dir, 
+            move=move, 
+            batch_size=BATCH_SIZE,
+            task_id=task_id
+        )
+        
     else:
-        # Use the main_function for other commands
-        try:
-            output = main_function(command, *args)
-            return {"output": output}
-        except Exception as e:
-            return {"error": str(e)}
+        # Start other commands in background
+        background_tasks.add_task(
+            run_command_task,
+            command=command,
+            args=args,
+            task_id=task_id
+        )
+    
+    return response
+
+async def run_upscale_task(upscaler, input_dir, output_dir, move, batch_size, task_id):
+    """Run upscale task in the background"""
+    try:
+        result = await upscaler.process_directory(
+            input_dir=input_dir,
+            output_dir=output_dir,
+            move=move,
+            batch_size=batch_size
+        )
+        background_tasks[task_id] = result
+    except Exception as e:
+        background_tasks[task_id] = {"error": str(e)}
+
+def run_command_task(command, args, task_id):
+    """Run other commands in the background"""
+    try:
+        output = main_function(command, *args)
+        background_tasks[task_id] = {"output": output, "status": "completed"}
+    except Exception as e:
+        background_tasks[task_id] = {"error": str(e), "status": "error"}
+
+@app.get("/status")
+async def get_status():
+    """Get the current processing status of the upscaler"""
+    return upscaler.get_status() if upscaler else {"status": "no_upscaler", "message": "Upscaler not initialized"}
