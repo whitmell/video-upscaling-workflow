@@ -36,21 +36,13 @@ class BatchUpscaler:
         self.last_image_memory = 100  # Default estimate in MB
     
     def _load_model(self):
-        """Load the AI model into memory with mixed precision."""
         print(f"Loading model from {self.model_path}...")
         try:
             m = spandrel.ModelLoader().load_from_file(self.model_path)
             assert isinstance(m, spandrel.ImageModelDescriptor)
             self.model = m.cuda().eval()
-            
-            # Enable mixed precision
-            if torch.cuda.is_available():
-                self.model = self.model.half()  # Convert to FP16
-                self.use_half_precision = True
-                print("Model loaded with mixed precision")
-            else:
-                self.use_half_precision = False
-                print("Model loaded successfully")
+            self.use_half_precision = False  # Try without half precision first
+            print("Model loaded successfully")
         except Exception as e:
             print(f"Error loading model: {e}")
             raise
@@ -68,19 +60,13 @@ class BatchUpscaler:
         self.unload_model()
 
     def pil_image_to_torch_bgr(self, img):
-        """Convert PIL image to torch tensor in the correct precision"""
+        """Simplified tensor conversion"""
         img = img[:, :, ::-1]  # flip RGB to BGR
         img = np.transpose(img, (2, 0, 1))  # HWC to CHW
         img = np.ascontiguousarray(img) / 255  # Rescale to [0, 1]
         
-        # Use pinned memory for faster CPU->GPU transfer
-        tensor = torch.from_numpy(img).unsqueeze(0).float()
-        tensor = tensor.pin_memory().to('cuda', non_blocking=True)
-        
-        # Convert to half precision if model uses it
-        if self.use_half_precision:
-            tensor = tensor.half()
-            
+        # Simpler GPU transfer, no pin_memory overhead
+        tensor = torch.from_numpy(img).unsqueeze(0).float().cuda()
         return tensor
 
     @staticmethod
@@ -251,61 +237,45 @@ class BatchUpscaler:
         return min(16, max_batch_size)
     
     async def _process_batch(self, batch, output_dir, move=False):
-        """Process a batch of images with overlapping I/O and GPU operations"""
-        # Create prefetch queue for next batch items
-        prefetch_queue = asyncio.Queue(maxsize=16)
-        loading_done = asyncio.Event()
-        
-        # Start prefetch worker
-        asyncio.create_task(self._prefetch_images(batch, prefetch_queue, loading_done))
-        
+        """Simplified batch processing"""
         results = []
-        gpu_batch = []
-        gpu_batch_paths = []
-        gpu_batch_size = 4  # Process 4 images at a time on GPU
         
-        # Process images as they become available
-        while not loading_done.is_set() or not prefetch_queue.empty():
-            try:
-                img, path = await asyncio.wait_for(prefetch_queue.get(), timeout=0.1)
-                if img is not None:
-                    # Preprocess and add to GPU batch - Use instance method, not static
-                    tensor = self.pil_image_to_torch_bgr(img)  # Changed from static method
-                    gpu_batch.append(tensor)
-                    gpu_batch_paths.append(path)
-                    
-                    # Process on GPU when batch is full
-                    if len(gpu_batch) >= gpu_batch_size:
-                        batch_results = self.process_batch_on_gpu(gpu_batch)
-                        for output, orig_path in zip(batch_results, gpu_batch_paths):
-                            base_name = os.path.basename(orig_path)
-                            out_path = os.path.join(output_dir, base_name)
-                            results.append((output, out_path, orig_path))
+        # Load and process images directly, no complex prefetching
+        with ThreadPoolExecutor(max_workers=8) as io_pool:  # Reduced from 16
+            # Load images
+            load_futures = {
+                io_pool.submit(cv2.imread, path, cv2.IMREAD_UNCHANGED): path 
+                for path in batch if self._is_image_file(path) and not os.path.isdir(path)
+            }
+            
+            # Process each image as it completes loading
+            for future in as_completed(load_futures):
+                path = load_futures[future]
+                try:
+                    img = future.result()
+                    if img is None:
+                        continue
                         
-                        # Reset batch
-                        gpu_batch = []
-                        gpu_batch_paths = []
-            except asyncio.TimeoutError:
-                continue
+                    # Process individual image
+                    tensor = self.pil_image_to_torch_bgr(img)
+                    output = self.process_image(tensor)
+                    
+                    # Save output path
+                    base_name = os.path.basename(path)
+                    out_path = os.path.join(output_dir, base_name)
+                    results.append((output, out_path, path))
+                except Exception as e:
+                    print(f"Error processing {path}: {e}")
         
-        # Process remaining images in the batch
-        if gpu_batch:
-            batch_results = self.process_batch_on_gpu(gpu_batch)
-            for output, orig_path in zip(batch_results, gpu_batch_paths):
-                base_name = os.path.basename(orig_path)
-                out_path = os.path.join(output_dir, base_name)
-                results.append((output, out_path, orig_path))
-        
-        # Save results in parallel
-        with ThreadPoolExecutor(max_workers=16) as save_pool:
+        # Save all results
+        with ThreadPoolExecutor(max_workers=8) as save_pool:  # Reduced from 16
             save_futures = []
             for output, out_path, orig_path in results:
                 save_futures.append(
                     save_pool.submit(self.save_image, output, out_path, orig_path, move)
                 )
             
-            # Wait for all saves to complete
-            for future in save_futures:
+            for future in as_completed(save_futures):
                 future.result()
         
         return len(results)
@@ -349,8 +319,11 @@ class BatchUpscaler:
         stacked_batch = torch.cat(tensors, dim=0)
         
         # Process the entire batch at once
+        start = time.time()
         with torch.no_grad():
             output = self.model(stacked_batch)
+        end = time.time()
+        print(f"Operation took {end-start:.4f} seconds")
         
         # Split the batch back into individual results
         return torch.split(output, 1)
