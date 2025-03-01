@@ -32,8 +32,15 @@ class BatchUpscaler:
         self.model = None
         self.streams = [torch.cuda.Stream() for _ in range(num_streams)]
         self.use_half_precision = torch.cuda.is_available()  # Flag to track precision mode
-        self._load_model()
+        # self._load_model()
         self.last_image_memory = 100  # Default estimate in MB
+        
+        # Enable OpenCV optimizations
+        cv2.setUseOptimized(True)
+        if cv2.useOptimized():
+            print("OpenCV optimizations enabled")
+        else:
+            print("OpenCV optimizations not available")
     
     def _load_model(self):
         print(f"Loading model from {self.model_path}...")
@@ -60,13 +67,18 @@ class BatchUpscaler:
         self.unload_model()
 
     def pil_image_to_torch_bgr(self, img):
-        """Simplified tensor conversion"""
+        """Simplified tensor conversion with explicit stream management"""
         img = img[:, :, ::-1]  # flip RGB to BGR
         img = np.transpose(img, (2, 0, 1))  # HWC to CHW
         img = np.ascontiguousarray(img) / 255  # Rescale to [0, 1]
         
-        # Simpler GPU transfer, no pin_memory overhead
-        tensor = torch.from_numpy(img).unsqueeze(0).float().cuda()
+        # Create CPU tensor first
+        tensor = torch.from_numpy(img).unsqueeze(0).float()
+        
+        # Transfer to GPU with non-blocking operation using current stream
+        with torch.cuda.stream(torch.cuda.current_stream()):
+            tensor = tensor.cuda(non_blocking=True)
+        
         return tensor
 
     @staticmethod
@@ -90,20 +102,33 @@ class BatchUpscaler:
     def save_image(self, output_img, output_path, original_path=None, move=False):
         """Save the processed image and optionally move the original."""
         try:
-            if output_img.dtype in (np.float32, np.float64):
-                output_img = (output_img * 255.0).clip(0, 255).astype(np.uint8)
-            
-            output_img = torch.flip(output_img, dims=[1])
-            pil_img = self.torch_bgr_to_pil_image(output_img)
-            pil_img.save(output_path)
-            
-            if move and original_path:
-                # Move original to processed directory
-                processed_dir = os.path.join(os.path.dirname(os.path.dirname(output_path)), "processed")
-                os.makedirs(processed_dir, exist_ok=True)
-                processed_path = os.path.join(processed_dir, os.path.basename(original_path))
-                os.rename(original_path, processed_path)
+            with torch.cuda.stream(torch.cuda.Stream()):
+                # Create a detached copy to avoid in-place modification error
+                detached_tensor = output_img.detach()
                 
+                # Extract the tensor data without in-place operations
+                np_img = detached_tensor.squeeze(0).permute(1, 2, 0).float().clamp(0, 1).cpu().numpy()
+                
+                # Convert BGR to RGB and scale to 8-bit in one operation
+                np_img = (np_img[:, :, ::-1] * 255.0).astype(np.uint8)
+                
+                # Use compression settings optimized for speed
+                if output_path.lower().endswith(('.png')):
+                    # Fastest PNG encoding (compression level 1)
+                    cv2.imwrite(output_path, np_img, [cv2.IMWRITE_PNG_COMPRESSION, 1])
+                elif output_path.lower().endswith(('.jpg', '.jpeg')):
+                    # Fast JPEG encoding (95% quality)
+                    cv2.imwrite(output_path, np_img, [cv2.IMWRITE_JPEG_QUALITY, 95])
+                else:
+                    cv2.imwrite(output_path, np_img)
+                
+                if move and original_path:
+                    # Move original to processed directory
+                    processed_dir = os.path.join(os.path.dirname(os.path.dirname(output_path)), "processed")
+                    os.makedirs(processed_dir, exist_ok=True)
+                    processed_path = os.path.join(processed_dir, os.path.basename(original_path))
+                    os.rename(original_path, processed_path)
+                    
             return True
         except Exception as e:
             print(f"Error saving image {output_path}: {e}")
@@ -237,40 +262,54 @@ class BatchUpscaler:
         return min(16, max_batch_size)
     
     async def _process_batch(self, batch, output_dir, move=False):
-        """Simplified batch processing"""
-        results = []
+        """Batch processing with true GPU batching"""
+        total_start = time.time()
         
-        # Load and process images directly, no complex prefetching
-        with ThreadPoolExecutor(max_workers=8) as io_pool:  # Reduced from 16
-            # Load images
+        # Phase 1: Loading images
+        load_start = time.time()
+        results = []
+        input_tensors = []
+        paths = []
+        
+        with ThreadPoolExecutor(max_workers=8) as io_pool:
             load_futures = {
                 io_pool.submit(cv2.imread, path, cv2.IMREAD_UNCHANGED): path 
                 for path in batch if self._is_image_file(path) and not os.path.isdir(path)
             }
             
-            # Process each image as it completes loading
             for future in as_completed(load_futures):
                 path = load_futures[future]
                 try:
                     img = future.result()
                     if img is None:
                         continue
-                        
-                    # Process individual image
-                    tensor = self.pil_image_to_torch_bgr(img)
-                    output = self.process_image(tensor)
                     
-                    # Save output path
-                    base_name = os.path.basename(path)
-                    out_path = os.path.join(output_dir, base_name)
-                    results.append((output, out_path, path))
+                    # Convert to tensor but don't process yet
+                    conversion_start = time.time()
+                    tensor = self.pil_image_to_torch_bgr(img)
+                    print(f"Tensor conversion took: {time.time() - conversion_start:.4f}s")
+                    
+                    input_tensors.append(tensor)
+                    paths.append(path)
                 except Exception as e:
                     print(f"Error processing {path}: {e}")
         
-        # Save all results
-        with ThreadPoolExecutor(max_workers=8) as save_pool:  # Reduced from 16
+        load_time = time.time() - load_start
+        print(f"Loading {len(input_tensors)} images took: {load_time:.4f}s")
+        
+        # Phase 2: GPU processing
+        gpu_start = time.time()
+        outputs = self.process_batch_on_gpu(input_tensors)
+        gpu_time = time.time() - gpu_start
+        print(f"GPU processing took: {gpu_time:.4f}s")
+        
+        # Phase 3: Saving results
+        save_start = time.time()
+        with ThreadPoolExecutor(max_workers=16) as save_pool:  # Increased from 8 to 16
             save_futures = []
-            for output, out_path, orig_path in results:
+            for output, orig_path in zip(outputs, paths):
+                base_name = os.path.basename(orig_path)
+                out_path = os.path.join(output_dir, base_name)
                 save_futures.append(
                     save_pool.submit(self.save_image, output, out_path, orig_path, move)
                 )
@@ -278,7 +317,17 @@ class BatchUpscaler:
             for future in as_completed(save_futures):
                 future.result()
         
-        return len(results)
+        save_time = time.time() - save_start
+        print(f"Saving results took: {save_time:.4f}s")
+        
+        total_time = time.time() - total_start
+        print(f"Total batch processing time: {total_time:.4f}s")
+        print(f"Time breakdown: Load {load_time/total_time*100:.1f}% | GPU {gpu_time/total_time*100:.1f}% | Save {save_time/total_time*100:.1f}%")
+        
+        # Add explicit synchronization before returning to ensure all CUDA operations complete
+        torch.cuda.synchronize()
+        
+        return len(outputs)
 
     async def _prefetch_images(self, batch, queue, done_event):
         """Prefetch and load images in background"""
@@ -311,19 +360,316 @@ class BatchUpscaler:
         return any(file_path.lower().endswith(ext) for ext in image_extensions)
 
     def process_batch_on_gpu(self, tensors):
-        """Process multiple images in a single GPU pass"""
-        # Stack all tensors into a single batch
+        """Process multiple images in a single GPU pass with proper synchronization"""
         if not tensors:
             return []
         
+        # Stack all tensors into a single batch
         stacked_batch = torch.cat(tensors, dim=0)
         
-        # Process the entire batch at once
+        # Process the entire batch and properly time GPU execution
         start = time.time()
         with torch.no_grad():
             output = self.model(stacked_batch)
+            # This ensures we wait for the operation to complete
+            torch.cuda.current_stream().synchronize()
         end = time.time()
-        print(f"Operation took {end-start:.4f} seconds")
+        print(f"Actual GPU execution took {end-start:.4f} seconds")
         
-        # Split the batch back into individual results
+        # Split the batch back into individual results (already synchronized)
         return torch.split(output, 1)
+
+    ### PROCESS FILES SEQUENTIALLY ###
+    def process_directory_seq(self, input_dir, output_dir, move=False):
+        """Process all images sequentially, one at a time, avoiding thread pools and async operations."""
+        # Reset status tracking variables
+        BatchUpscaler._status = "running"
+        BatchUpscaler._message = "Starting sequential processing..."
+        BatchUpscaler._processed_files = 0
+        BatchUpscaler._start_time = time.time()
+        BatchUpscaler._last_update_time = time.time()
+        
+        # Check if model is loaded
+        if self.model is None:
+            self._load_model()
+        
+        # Get all files in input directory
+        files = glob.glob(os.path.join(input_dir, '*'))
+        total_files = len(files)
+        BatchUpscaler._total_files = total_files
+        BatchUpscaler._total_batches = total_files  # For status reporting
+        
+        if total_files == 0:
+            BatchUpscaler._status = "idle"
+            BatchUpscaler._message = f"No files found in {input_dir}"
+            print(BatchUpscaler._message)
+            return {"status": "completed", "processed": 0, "total": 0}
+        
+        # Create output directory if it doesn't exist
+        os.makedirs(output_dir, exist_ok=True)
+        
+        print(f"Starting sequential processing of {total_files} files...")
+        BatchUpscaler._message = f"Starting sequential processing of {total_files} files..."
+        
+        # Custom progress bar that updates our status
+        progress = tqdm(total=total_files, desc="Processing images")
+        
+        processed_count = 0
+        errors = []
+        
+        # Process each file individually
+        for file_idx, file_path in enumerate(files):
+            BatchUpscaler._current_batch = file_idx + 1  # Reusing batch counter for individual files
+            BatchUpscaler._message = f"Processing file {file_idx + 1}/{total_files}"
+            
+            if os.path.isdir(file_path) or not self._is_image_file(file_path):
+                progress.update(1)
+                continue
+                
+            try:
+                # Process single image
+                success = self._process_single_image(file_path, output_dir, move)
+                if success:
+                    processed_count += 1
+                    BatchUpscaler._processed_files += 1
+                progress.update(1)
+            except Exception as e:
+                error_msg = f"Error processing file {file_path}: {e}"
+                print(error_msg)
+                BatchUpscaler._message = error_msg
+                errors.append({"file": file_path, "error": str(e)})
+                progress.update(1)
+        
+        progress.close()
+        
+        # Update status
+        BatchUpscaler._status = "idle"
+        BatchUpscaler._message = f"Completed processing {processed_count} files" + (
+            " with errors" if errors else ""
+        )
+        
+        return {
+            "status": "completed" if not errors else "completed_with_errors",
+            "processed": processed_count,
+            "total": total_files,
+            "errors": errors
+        }
+
+    def _process_single_image(self, file_path, output_dir, move=False):
+        """Process a single image file from start to finish."""
+        total_start = time.time()
+        
+        # Phase 1: Load image
+        load_start = time.time()
+        try:
+            img = cv2.imread(file_path, cv2.IMREAD_UNCHANGED)
+            if img is None:
+                print(f"Could not load image: {file_path}")
+                return False
+        except Exception as e:
+            print(f"Error loading {file_path}: {e}")
+            return False
+        
+        # Convert to tensor
+        conversion_start = time.time()
+        tensor = self.pil_image_to_torch_bgr(img)
+        conversion_time = time.time() - conversion_start
+        print(f"Tensor conversion took: {conversion_time:.4f}s")
+        
+        load_time = time.time() - load_start
+        print(f"Loading image took: {load_time:.4f}s")
+        
+        # Phase 2: GPU processing
+        gpu_start = time.time()
+        with torch.no_grad():
+            output = self.model(tensor)
+        gpu_time = time.time() - gpu_start
+        print(f"GPU processing took: {gpu_time:.4f}s")
+        
+        # Phase 3: Save result
+        save_start = time.time()
+        base_name = os.path.basename(file_path)
+        out_path = os.path.join(output_dir, base_name)
+        success = self.save_image(output, out_path, file_path, move)
+        save_time = time.time() - save_start
+        print(f"Saving result took: {save_time:.4f}s")
+        
+        total_time = time.time() - total_start
+        print(f"Total image processing time: {total_time:.4f}s")
+        print(f"Time breakdown: Load {load_time/total_time*100:.1f}% | GPU {gpu_time/total_time*100:.1f}% | Save {save_time/total_time*100:.1f}%")
+        
+        # Make sure CUDA operations are complete
+        torch.cuda.synchronize()
+        
+        return success
+
+    def upscale_ncnn(self, input_path, output_path):
+        """
+        Use Real-ESRGAN NCNN Vulkan executable to process images.
+        This is often faster than PyTorch for certain GPUs.
+        
+        Args:
+            input_path: Directory containing input images
+            output_path: Directory for output images
+        """
+        import subprocess
+        import re
+        import os
+        import sys
+        from pathlib import Path
+
+        # Adjust these parameters for your hardware
+        LOAD_THREADS = 2     # Increased from 2
+        PROCESS_THREADS = 6 # Significantly increased from 4
+        SAVE_THREADS = 3     # Increased from 2
+        TILE_SIZE = 0     # Explicitly set tile size (was auto/0)
+        
+        # Reset status tracking variables
+        BatchUpscaler._status = "running"
+        BatchUpscaler._message = "Starting NCNN upscaling..."
+        BatchUpscaler._processed_files = 0
+        BatchUpscaler._start_time = time.time()
+        BatchUpscaler._last_update_time = time.time()
+        
+        # Create output directory if it doesn't exist
+        os.makedirs(output_path, exist_ok=True)
+        
+        # Count total files for progress tracking
+        files = [f for f in os.listdir(input_path) if self._is_image_file(os.path.join(input_path, f))]
+        total_files = len(files)
+        BatchUpscaler._total_files = total_files
+        BatchUpscaler._total_batches = 1  # NCNN processes in a single batch
+        
+        if total_files == 0:
+            BatchUpscaler._status = "idle"
+            BatchUpscaler._message = f"No files found in {input_path}"
+            print(BatchUpscaler._message)
+            return {"status": "completed", "processed": 0, "total": 0}
+        
+        print(f"Starting NCNN processing of {total_files} files...")
+        BatchUpscaler._message = f"Starting NCNN processing of {total_files} files..."
+        
+        # Prepare command
+        base_dir = Path(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
+        ncnn_exec = base_dir / "resources" / "realesrgan-ncnn-vulcan" / "realesrgan-ncnn-vulkan.exe"
+        model_path = "D:\\Video\\video-upscaling-workflow\\resources\\models\\upscaling"
+        
+        # Ensure executable exists
+        if not os.path.exists(ncnn_exec):
+            error_msg = f"NCNN executable not found at {ncnn_exec}"
+            print(error_msg)
+            BatchUpscaler._status = "error"
+            BatchUpscaler._message = error_msg
+            return {"status": "error", "message": error_msg}
+        
+        command = [
+            str(ncnn_exec),
+            "-i", input_path,
+            "-o", output_path,
+            "-m", model_path,
+            "-n", "realesrgan-x4plus",
+            "-g", "0",       # Use GPU 0
+            "-t", str(TILE_SIZE), # Add explicit tile size
+            "-j", f"{LOAD_THREADS}:{PROCESS_THREADS}:{SAVE_THREADS}",
+            "-v",            # Verbose output
+        ]
+        
+        # Regex patterns for progress tracking
+        done_pattern = re.compile(r'(.+) -> (.+) done')
+        percent_pattern = re.compile(r'(\d+)%')
+        
+        # Display command we're executing
+        print(f"Executing: {' '.join(command)}")
+        
+        # Execute command and monitor output in real-time
+        process = subprocess.Popen(
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,  # Line buffering
+            universal_newlines=True
+        )
+        
+        current_file_progress = 0
+        last_file = None
+        
+        try:
+            # Read output line by line in real-time
+            while process.poll() is None or process.stdout:
+                line = process.stdout.readline()
+                if not line:
+                    if process.poll() is not None:
+                        break
+                    continue
+                
+                line = line.strip()
+                # Print output directly to console to see real-time progress
+                print(line, flush=True)
+                
+                # Check if a file was completed
+                done_match = done_pattern.search(line)
+                if done_match:
+                    source_file = done_match.group(1)
+                    dest_file = done_match.group(2)
+                    last_file = os.path.basename(dest_file)
+                    
+                    # Increment processed files counter
+                    BatchUpscaler._processed_files += 1
+                    
+                    # Calculate progress stats
+                    progress_pct = (BatchUpscaler._processed_files / total_files) * 100
+                    elapsed = time.time() - BatchUpscaler._start_time
+                    files_per_sec = BatchUpscaler._processed_files / elapsed if elapsed > 0 else 0
+                    remaining = (total_files - BatchUpscaler._processed_files) / files_per_sec if files_per_sec > 0 else 0
+                    
+                    # Update status message with comprehensive information
+                    BatchUpscaler._message = (
+                        f"Processing: {BatchUpscaler._processed_files}/{total_files} "
+                        f"[{progress_pct:.1f}%] ({files_per_sec:.2f} img/s, "
+                        f"ETA: {time.strftime('%H:%M:%S', time.gmtime(remaining))}) "
+                        f"Last: {last_file}"
+                    )
+                    current_file_progress = 0
+                    continue
+                
+                # Check for percentage updates on current file
+                percent_match = percent_pattern.search(line)
+                if percent_match:
+                    current_file_progress = int(percent_match.group(1))
+                    # Update status with both overall progress and current file progress
+                    BatchUpscaler._message = (
+                        f"Processing: {BatchUpscaler._processed_files}/{total_files} "
+                        f"[{BatchUpscaler._processed_files/total_files*100:.1f}%] "
+                        f"Current file: {current_file_progress}%"
+                    )
+            
+            # Wait for process to complete
+            process.wait()
+            
+            # Check return code
+            if process.returncode != 0:
+                BatchUpscaler._status = "error"
+                BatchUpscaler._message = f"NCNN process exited with code {process.returncode}"
+                return {"status": "error", "message": BatchUpscaler._message}
+            
+            BatchUpscaler._status = "idle"
+            BatchUpscaler._message = f"Completed processing {BatchUpscaler._processed_files} files"
+            
+            return {
+                "status": "completed",
+                "processed": BatchUpscaler._processed_files,
+                "total": total_files
+            }
+            
+        except Exception as e:
+            BatchUpscaler._status = "error"
+            BatchUpscaler._message = f"Error during NCNN processing: {str(e)}"
+            print(f"Error: {str(e)}")
+            
+            # Make sure to terminate the process if something goes wrong
+            if process.poll() is None:
+                process.terminate()
+                process.wait()
+                
+            return {"status": "error", "message": str(e)}

@@ -19,7 +19,7 @@ templates = Jinja2Templates(directory=TEMPLATES_DIR)
 REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
 REDIS_PORT = int(os.getenv("REDIS_PORT", 6379))
 WORKER_COUNT = int(os.getenv("WORKER_COUNT", 3))
-BATCH_SIZE = int(os.getenv("BATCH_SIZE", 16))
+BATCH_SIZE = int(os.getenv("BATCH_SIZE", 4))
 
 # This Pydantic model enforces the JSON structure
 class CommandRequest(BaseModel):
@@ -111,14 +111,29 @@ async def run_command(request_data: CommandRequest, background_tasks: Background
 async def run_upscale_task(upscaler, input_dir, output_dir, move, batch_size, task_id):
     """Run upscale task in the background"""
     try:
-        result = await upscaler.process_directory(
-            input_dir=input_dir,
-            output_dir=output_dir,
-            move=move,
-            batch_size=batch_size
+        # SEQUENTIAL PROCESSING
+        # result = await upscaler.process_directory_seq(
+        #     input_dir=input_dir,
+        #     output_dir=output_dir,
+        #     move=move
+        # )
+
+        # BATCH PROCESSING
+        # result = await upscaler.process_directory(
+        #     input_dir=input_dir,
+        #     output_dir=output_dir,
+        #     move=move,
+        #     batch_size=batch_size
+        # )
+
+        # NCNN-VULCAN PROCESSING
+        result = await upscaler.upscale_ncnn(
+            input_path=input_dir,
+            output_path=output_dir
         )
         background_tasks[task_id] = result
     except Exception as e:
+        print(f"Error: {e}")
         background_tasks[task_id] = {"error": str(e)}
 
 def run_command_task(command, args, task_id):
