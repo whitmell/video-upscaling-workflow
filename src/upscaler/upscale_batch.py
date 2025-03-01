@@ -507,21 +507,20 @@ class BatchUpscaler:
         """
         Use Real-ESRGAN NCNN Vulkan executable to process images.
         This is often faster than PyTorch for certain GPUs.
-        
-        Args:
-            input_path: Directory containing input images
-            output_path: Directory for output images
         """
         import subprocess
         import re
         import os
         import sys
+        import threading
         from pathlib import Path
+        import asyncio
+        from concurrent.futures import ThreadPoolExecutor
 
         # Adjust these parameters for your hardware
         LOAD_THREADS = 2     # Increased from 2
         PROCESS_THREADS = 6 # Significantly increased from 4
-        SAVE_THREADS = 3     # Increased from 2
+        SAVE_THREADS = 4     # Increased from 2
         TILE_SIZE = 0     # Explicitly set tile size (was auto/0)
         
         # Reset status tracking variables
@@ -581,95 +580,97 @@ class BatchUpscaler:
         # Display command we're executing
         print(f"Executing: {' '.join(command)}")
         
-        # Execute command and monitor output in real-time
-        process = subprocess.Popen(
-            command,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            bufsize=1,  # Line buffering
-            universal_newlines=True
-        )
+        # Create a Future to handle completion
+        loop = asyncio.get_event_loop()
+        future = loop.create_future()
         
-        current_file_progress = 0
-        last_file = None
-        
-        try:
-            # Read output line by line in real-time
-            while process.poll() is None or process.stdout:
-                line = process.stdout.readline()
-                if not line:
-                    if process.poll() is not None:
-                        break
-                    continue
+        # Move subprocess handling to a separate thread
+        def process_output_thread():
+            try:
+                process = subprocess.Popen(
+                    command,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    bufsize=1,
+                    universal_newlines=True
+                )
                 
-                line = line.strip()
-                # Print output directly to console to see real-time progress
-                print(line, flush=True)
+                current_file_progress = 0
+                last_file = None
                 
-                # Check if a file was completed
-                done_match = done_pattern.search(line)
-                if done_match:
-                    source_file = done_match.group(1)
-                    dest_file = done_match.group(2)
-                    last_file = os.path.basename(dest_file)
+                # Process output in thread (doesn't block event loop)
+                while process.poll() is None or process.stdout:
+                    line = process.stdout.readline()
+                    if not line:
+                        if process.poll() is not None:
+                            break
+                        continue
                     
-                    # Increment processed files counter
-                    BatchUpscaler._processed_files += 1
+                    line = line.strip()
+                    print(line, flush=True)
                     
-                    # Calculate progress stats
-                    progress_pct = (BatchUpscaler._processed_files / total_files) * 100
-                    elapsed = time.time() - BatchUpscaler._start_time
-                    files_per_sec = BatchUpscaler._processed_files / elapsed if elapsed > 0 else 0
-                    remaining = (total_files - BatchUpscaler._processed_files) / files_per_sec if files_per_sec > 0 else 0
+                    # Check if a file was completed
+                    done_match = done_pattern.search(line)
+                    if done_match:
+                        source_file = done_match.group(1)
+                        dest_file = done_match.group(2)
+                        last_file = os.path.basename(dest_file)
+                        
+                        # Thread-safe increment
+                        BatchUpscaler._processed_files += 1
+                        
+                        # Calculate progress stats
+                        progress_pct = (BatchUpscaler._processed_files / total_files) * 100
+                        elapsed = time.time() - BatchUpscaler._start_time
+                        files_per_sec = BatchUpscaler._processed_files / elapsed if elapsed > 0 else 0
+                        remaining = (total_files - BatchUpscaler._processed_files) / files_per_sec if files_per_sec > 0 else 0
+                        
+                        BatchUpscaler._message = (
+                            f"Processing: {BatchUpscaler._processed_files}/{total_files} "
+                            f"[{progress_pct:.1f}%] ({files_per_sec:.2f} img/s, "
+                            f"ETA: {time.strftime('%H:%M:%S', time.gmtime(remaining))}) "
+                            f"Last: {last_file}"
+                        )
+                        continue
                     
-                    # Update status message with comprehensive information
-                    BatchUpscaler._message = (
-                        f"Processing: {BatchUpscaler._processed_files}/{total_files} "
-                        f"[{progress_pct:.1f}%] ({files_per_sec:.2f} img/s, "
-                        f"ETA: {time.strftime('%H:%M:%S', time.gmtime(remaining))}) "
-                        f"Last: {last_file}"
-                    )
-                    current_file_progress = 0
-                    continue
+                    # Check for percentage updates
+                    percent_match = percent_pattern.search(line)
+                    if percent_match:
+                        current_file_progress = int(percent_match.group(1))
+                        BatchUpscaler._message = (
+                            f"Processing: {BatchUpscaler._processed_files}/{total_files} "
+                            f"[{BatchUpscaler._processed_files/total_files*100:.1f}%] "
+                            f"Current file: {current_file_progress}%"
+                        )
                 
-                # Check for percentage updates on current file
-                percent_match = percent_pattern.search(line)
-                if percent_match:
-                    current_file_progress = int(percent_match.group(1))
-                    # Update status with both overall progress and current file progress
-                    BatchUpscaler._message = (
-                        f"Processing: {BatchUpscaler._processed_files}/{total_files} "
-                        f"[{BatchUpscaler._processed_files/total_files*100:.1f}%] "
-                        f"Current file: {current_file_progress}%"
-                    )
-            
-            # Wait for process to complete
-            process.wait()
-            
-            # Check return code
-            if process.returncode != 0:
-                BatchUpscaler._status = "error"
-                BatchUpscaler._message = f"NCNN process exited with code {process.returncode}"
-                return {"status": "error", "message": BatchUpscaler._message}
-            
-            BatchUpscaler._status = "idle"
-            BatchUpscaler._message = f"Completed processing {BatchUpscaler._processed_files} files"
-            
-            return {
-                "status": "completed",
-                "processed": BatchUpscaler._processed_files,
-                "total": total_files
-            }
-            
-        except Exception as e:
-            BatchUpscaler._status = "error"
-            BatchUpscaler._message = f"Error during NCNN processing: {str(e)}"
-            print(f"Error: {str(e)}")
-            
-            # Make sure to terminate the process if something goes wrong
-            if process.poll() is None:
-                process.terminate()
+                # Process completed
                 process.wait()
                 
-            return {"status": "error", "message": str(e)}
+                # Set result on future to signal completion
+                if process.returncode == 0:
+                    BatchUpscaler._status = "idle"
+                    BatchUpscaler._message = f"Completed processing {BatchUpscaler._processed_files} files"
+                    loop.call_soon_threadsafe(
+                        future.set_result, 
+                        {"status": "completed", "processed": BatchUpscaler._processed_files, "total": total_files}
+                    )
+                else:
+                    error_msg = f"NCNN process exited with code {process.returncode}"
+                    BatchUpscaler._status = "error"
+                    BatchUpscaler._message = error_msg
+                    loop.call_soon_threadsafe(future.set_result, {"status": "error", "message": error_msg})
+                    
+            except Exception as e:
+                error_msg = f"Error during NCNN processing: {str(e)}"
+                BatchUpscaler._status = "error"
+                BatchUpscaler._message = error_msg
+                print(f"Error: {str(e)}")
+                loop.call_soon_threadsafe(future.set_result, {"status": "error", "message": error_msg})
+
+        # Start processing thread
+        threading.Thread(target=process_output_thread, daemon=True).start()
+        
+        # Return future that will be resolved when processing completes
+        return future
+
